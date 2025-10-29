@@ -209,7 +209,10 @@ PORT=3000 npm start
 - **Offline mode** (Vosk) works without internet but:
   - Only transcription works offline (translation still requires internet)
   - Requires downloading a language model (39+ MB)
-  - Slightly less accurate than Google's online API
+  - Small models (vosk-model-small-en-us-0.15) are very sensitive to background noise and may transcribe words when no one is speaking
+  - For production use, consider larger models (vosk-model-en-us-0.22, 1.8 GB) which have better silence detection
+  - Offline mode is experimental and best tested in quiet, controlled environments
+  - Slightly less accurate than Google's online API overall
 - Transcription default language is English (can be changed by using different Vosk models)
 - Translation requires internet (MyMemory API has daily limit of 1000 words for anonymous usage)
 - WebRTC connections may require network configuration for remote access

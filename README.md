@@ -17,7 +17,9 @@ A real-time audio broadcasting application with live speech-to-text transcriptio
 - **Frontend**: HTML5, JavaScript, WebRTC
 - **Backend**: Node.js with Express and Socket.IO
 - **Desktop App**: Electron framework
-- **Transcription Engine**: Python with SpeechRecognition library (uses free Google Speech API)
+- **Transcription Engine**:
+  - **Online Mode**: Google's free Web Speech API (requires internet)
+  - **Offline Mode**: Vosk (fully open source, no internet required)
 - **Translation**: MyMemory Translation API (free, 1000 words/day anonymous)
 
 ## Prerequisites
@@ -70,6 +72,35 @@ Translation uses MyMemory Translation API by default. No configuration or API ke
 - With email registration: 10,000 words per day
 
 The free tier is more than sufficient for most church and small organization use cases.
+
+### 5. Offline Mode Setup (Optional - for churches without internet)
+
+By default, the app uses Google's free Web Speech API (requires internet). For offline operation:
+
+**Step 1: Download a Vosk model**
+```bash
+# Download a small English model (39 MB, good accuracy)
+curl -O https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+unzip vosk-model-small-en-us-0.15.zip
+mv vosk-model-small-en-us-0.15 vosk-model
+
+# Or download other models from: https://alphacephei.com/vosk/models
+# Larger models offer better accuracy but require more resources
+```
+
+**Step 2: Enable offline mode**
+
+Edit `transcribe.py` and change line 15:
+```python
+TRANSCRIPTION_MODE = 'offline'  # Change from 'online' to 'offline'
+```
+
+**Step 3: Restart the app**
+```bash
+npm start
+```
+
+The app will now work completely offline! Perfect for churches in areas with poor/no internet connectivity.
 
 ## Usage
 
@@ -174,10 +205,14 @@ PORT=3000 npm start
 
 ## Known Limitations
 
-- Transcription currently only supports English speech input (can be changed in transcribe.py)
-- Translation requires an active internet connection
+- **Online mode** requires an active internet connection for transcription and translation
+- **Offline mode** (Vosk) works without internet but:
+  - Only transcription works offline (translation still requires internet)
+  - Requires downloading a language model (39+ MB)
+  - Slightly less accurate than Google's online API
+- Transcription default language is English (can be changed by using different Vosk models)
+- Translation requires internet (MyMemory API has daily limit of 1000 words for anonymous usage)
 - WebRTC connections may require network configuration for remote access
-- MyMemory API has a daily limit of 1000 words for anonymous usage
 
 ## Contributing
 

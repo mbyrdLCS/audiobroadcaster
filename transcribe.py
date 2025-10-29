@@ -5,10 +5,21 @@ import sounddevice as sd
 import speech_recognition as sr
 import numpy as np
 import os
+import json
 
-# Set Google Cloud credentials (optional if using free tier)
-# Uncomment and set the path if you have credentials
-# os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/Users/MJB/audiobroadcaster/speech-to-text-credentials.json'
+# ============================================================================
+# CONFIGURATION: Choose your transcription mode
+# ============================================================================
+# Set to 'online' for Google's free Web Speech API (requires internet)
+# Set to 'offline' for Vosk (no internet required, fully open source)
+TRANSCRIPTION_MODE = 'online'  # Change to 'offline' for offline mode
+
+# For offline mode: Path to Vosk model directory
+# Download models from: https://alphacephei.com/vosk/models
+# Recommended: vosk-model-small-en-us-0.15 (39 MB) for English
+VOSK_MODEL_PATH = os.path.join(os.path.dirname(__file__), 'vosk-model')
+
+# ============================================================================
 
 # Configure audio input dynamically
 def get_device_info(device_index):
@@ -76,8 +87,31 @@ def test_audio_input():
 # Commented out automatic test - it was blocking the transcription loop
 # test_audio_input()
 
-# Initialize speech recognizer
+# Initialize speech recognizer based on mode
 recognizer = sr.Recognizer()
+vosk_model = None
+vosk_recognizer = None
+
+if TRANSCRIPTION_MODE == 'offline':
+    try:
+        from vosk import Model, KaldiRecognizer
+        print(f"Loading Vosk model from: {VOSK_MODEL_PATH}", file=sys.stderr)
+        if not os.path.exists(VOSK_MODEL_PATH):
+            print(f"ERROR: Vosk model not found at {VOSK_MODEL_PATH}", file=sys.stderr)
+            print("Download a model from https://alphacephei.com/vosk/models", file=sys.stderr)
+            print("Recommended: vosk-model-small-en-us-0.15 (39 MB)", file=sys.stderr)
+            print("Falling back to online mode...", file=sys.stderr)
+            TRANSCRIPTION_MODE = 'online'
+        else:
+            vosk_model = Model(VOSK_MODEL_PATH)
+            vosk_recognizer = KaldiRecognizer(vosk_model, samplerate)
+            print(f"Vosk model loaded successfully - OFFLINE MODE ACTIVE", file=sys.stderr)
+    except ImportError:
+        print("ERROR: Vosk not installed. Run: pip install vosk", file=sys.stderr)
+        print("Falling back to online mode...", file=sys.stderr)
+        TRANSCRIPTION_MODE = 'online'
+
+print(f"Transcription mode: {TRANSCRIPTION_MODE.upper()}", file=sys.stderr)
 
 # Control flags
 listening = False
@@ -119,31 +153,52 @@ try:
     while not stop_event.is_set():
         if listening:
             print("Listening for speech...", file=sys.stderr)
-            with sr.Microphone(device_index=device_index, sample_rate=samplerate) as source:
-                # Adjust for ambient noise
-                recognizer.adjust_for_ambient_noise(source, duration=1)
-                print("Adjusted for ambient noise", file=sys.stderr)
-                
-                while listening and not stop_event.is_set():
-                    try:
-                        # Listen for audio with a timeout
-                        audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
-                        # Recognize speech using Google Speech-to-Text
-                        transcript = recognizer.recognize_google(audio)
-                        if transcript:
-                            print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)
-                            # Remove repetitive words
-                            filtered_transcript = remove_repetitive_words(transcript)
-                            print(filtered_transcript, flush=True)
-                            time.sleep(0.5)
-                    except sr.WaitTimeoutError:
-                        print("DEBUG: No speech detected within timeout", file=sys.stderr)
-                    except sr.UnknownValueError:
-                        print("DEBUG: Could not understand audio", file=sys.stderr)
-                    except sr.RequestError as e:
-                        print(f"Speech recognition error: {e}", file=sys.stderr)
-                    except Exception as e:
-                        print(f"Unexpected error: {e}", file=sys.stderr)
+
+            if TRANSCRIPTION_MODE == 'online':
+                # ONLINE MODE: Using Google's free Web Speech API
+                with sr.Microphone(device_index=device_index, sample_rate=samplerate) as source:
+                    recognizer.adjust_for_ambient_noise(source, duration=1)
+                    print("Adjusted for ambient noise", file=sys.stderr)
+
+                    while listening and not stop_event.is_set():
+                        try:
+                            audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
+                            transcript = recognizer.recognize_google(audio)
+                            if transcript:
+                                print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)
+                                filtered_transcript = remove_repetitive_words(transcript)
+                                print(filtered_transcript, flush=True)
+                                time.sleep(0.5)
+                        except sr.WaitTimeoutError:
+                            print("DEBUG: No speech detected within timeout", file=sys.stderr)
+                        except sr.UnknownValueError:
+                            print("DEBUG: Could not understand audio", file=sys.stderr)
+                        except sr.RequestError as e:
+                            print(f"Speech recognition error: {e}", file=sys.stderr)
+                        except Exception as e:
+                            print(f"Unexpected error: {e}", file=sys.stderr)
+
+            else:
+                # OFFLINE MODE: Using Vosk
+                print("Starting offline transcription with Vosk...", file=sys.stderr)
+                with sd.RawInputStream(samplerate=samplerate, blocksize=8000, device=device_index,
+                                      dtype='int16', channels=1) as stream:
+                    print("Vosk stream opened, listening...", file=sys.stderr)
+
+                    while listening and not stop_event.is_set():
+                        try:
+                            data = stream.read(4000)[0]
+                            if vosk_recognizer.AcceptWaveform(bytes(data)):
+                                result = json.loads(vosk_recognizer.Result())
+                                if result.get('text'):
+                                    transcript = result['text']
+                                    print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)
+                                    filtered_transcript = remove_repetitive_words(transcript)
+                                    if filtered_transcript:
+                                        print(filtered_transcript, flush=True)
+                                        time.sleep(0.5)
+                        except Exception as e:
+                            print(f"Vosk error: {e}", file=sys.stderr)
         else:
             time.sleep(0.1)
 except Exception as e:

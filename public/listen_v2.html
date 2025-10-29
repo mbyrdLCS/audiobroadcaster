@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Listener</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            color: #fff;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+            transition: transform 0.3s ease;
+        }
+        .container:hover {
+            transform: translateY(-5px);
+        }
+        .logo {
+            width: 120px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+            color: #fff;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        p {
+            font-size: 1em;
+            margin-bottom: 20px;
+            color: #d0e1ff;
+        }
+        audio {
+            width: 100%;
+            max-width: 300px;
+            margin: 15px auto;
+            display: block;
+            border-radius: 10px;
+            background: #fff;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        button {
+            background: linear-gradient(45deg, #00c6ff, #0072ff);
+            border: none;
+            padding: 12px 24px;
+            font-size: 1em;
+            color: #fff;
+            border-radius: 25px;
+            cursor: pointer;
+            margin: 5px;
+            transition: background 0.3s ease, transform 0.2s ease;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        button:hover {
+            background: linear-gradient(45deg, #0072ff, #00c6ff);
+            transform: scale(1.05);
+        }
+        #speakButton {
+            background: linear-gradient(45deg, #dc3545, #c82333);
+        }
+        #speakButton:hover {
+            background: linear-gradient(45deg, #c82333, #dc3545);
+        }
+        #volumeControl {
+            width: 100%;
+            max-width: 300px;
+            margin: 10px auto;
+            display: block;
+            -webkit-appearance: none;
+            height: 8px;
+            border-radius: 5px;
+            background: #d0e1ff;
+            outline: none;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+        #volumeControl:hover {
+            opacity: 1;
+        }
+        #volumeControl::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: linear-gradient(45deg, #00c6ff, #0072ff);
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+        }
+        #translatedText {
+            margin-top: 20px;
+            font-size: 1.1em;
+        }
+        #logTextarea { 
+            width: 100%;
+            height: 100px;
+            margin-top: 10px;
+            background: #fff;
+            color: #000;
+            border-radius: 5px;
+            padding: 5px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        #selectAllButton {
+            background: linear-gradient(45deg, #6f42c1, #5a32a8);
+            border: none;
+            padding: 8px 16px;
+            font-size: 0.9em;
+            color: #fff;
+            border-radius: 25px;
+            cursor: pointer;
+            margin-top: 5px;
+            transition: background 0.3s ease, transform 0.2s ease;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        #selectAllButton:hover {
+            background: linear-gradient(45deg, #5a32a8, #6f42c1);
+            transform: scale(1.05);
+        }
+        #debug {
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 10px;
+            margin-top: 20px;
+            border-radius: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <img src="/Logo_primary_RGB.png" alt="ChurchApps Logo" class="logo">
+        <h1>Audio Listener</h1>
+        <p>Tap Play to tune in</p>
+        <audio id="audioPlayer" controls controlslist="nodownload" preload="auto"></audio>
+        <button id="playButton">Play</button>
+        <button id="reloadButton">Reload</button>
+        <button id="copyLogs">Copy Logs</button>
+        <button id="speakButton">Auto-Speak: OFF</button>
+        <input type="range" id="volumeControl" min="0" max="1" step="0.01" value="1">
+        <div id="translatedText"></div>
+        <textarea id="logTextarea" readonly></textarea>
+        <button id="selectAllButton">Select All</button>
+        <div id="debug"></div>
+    </div>
+
+    <script>
+        let socket;
+        const audioPlayer = document.getElementById('audioPlayer');
+        const debug = document.getElementById('debug');
+        const playButton = document.getElementById('playButton');
+        const reloadButton = document.getElementById('reloadButton');
+        const copyLogsButton = document.getElementById('copyLogs');
+        const speakButton = document.getElementById('speakButton');
+        const volumeControl = document.getElementById('volumeControl');
+        const logTextarea = document.getElementById('logTextarea');
+        const translatedTextDiv = document.getElementById('translatedText');
+        let pc = null;
+        let mediaStream = null;
+        let hasInteracted = false;
+        let isInitialized = false;
+        let lastTranslatedText = '';
+        let lastTranslatedLang = 'es';
+        let speechEnabled = false;
+        let translationEnabled = false; // Will be set by translation-state event from server
+
+        function log(message) {
+            const now = new Date().toLocaleTimeString();
+            debug.innerText += `[${now}] ${message}\n`;
+            logTextarea.value = debug.innerText;
+            debug.scrollTop = debug.scrollHeight;
+            console.log(message);
+        }
+
+        async function initializeWebRTC() {
+            if (pc) pc.close();
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+
+            pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', event.candidate);
+                    log('ICE candidate sent');
+                }
+            };
+
+            pc.ontrack = (event) => {
+                log('Received remote track');
+                mediaStream = event.streams[0];
+                log(`Stream tracks: ${mediaStream.getAudioTracks().length}`);
+                audioPlayer.srcObject = mediaStream;
+                // Don't set mute state here - let translation-state event control it
+                audioPlayer.volume = volumeControl.value;
+                if (hasInteracted) {
+                    audioPlayer.play().then(() => log('Audio playing'))
+                        .catch(err => log(`Play error: ${err.message}`));
+                }
+            };
+
+            pc.onconnectionstatechange = () => {
+                log(`Connection state: ${pc.connectionState}`);
+                if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                    log('Connection lost, reconnecting...');
+                    initializeWebRTC();
+                    socket.emit('listener');
+                }
+            };
+        }
+
+        async function togglePlayPause() {
+            hasInteracted = true;
+            if (audioPlayer.paused) {
+                if (!mediaStream || mediaStream.getAudioTracks().length === 0) {
+                    log('No stream available, initializing...');
+                    initializeWebRTC();
+                    socket.emit('listener');
+                    return;
+                }
+                try {
+                    await audioPlayer.play();
+                    playButton.textContent = 'Pause';
+                    log('Playing');
+                } catch (err) {
+                    log(`Play error: ${err.message}`);
+                }
+            } else {
+                audioPlayer.pause();
+                playButton.textContent = 'Play';
+                log('Paused');
+            }
+        }
+
+        function speakText(text) {
+            // Cancel any ongoing speech
+            window.speechSynthesis.cancel();
+
+            // iOS Safari fix: Pause audio player briefly to allow speech to play
+            const wasPlaying = !audioPlayer.paused;
+            if (wasPlaying) {
+                audioPlayer.pause();
+            }
+
+            const utterance = new SpeechSynthesisUtterance(text);
+            // map BCP-47 where possible, default region fallback
+            const region = lastTranslatedLang === 'zh' ? 'CN' : (lastTranslatedLang === 'pt' ? 'BR' : lastTranslatedLang.toUpperCase());
+            utterance.lang = `${lastTranslatedLang}-${region}`;
+
+            // List available voices and select a voice for the target language
+            const voices = window.speechSynthesis.getVoices();
+            const matchedVoice = voices.find(voice => voice.lang.toLowerCase().startsWith(lastTranslatedLang.toLowerCase()))
+                || voices.find(voice => voice.lang.toLowerCase().includes(lastTranslatedLang.toLowerCase()));
+            if (matchedVoice) {
+                utterance.voice = matchedVoice;
+                log(`Speaking (${matchedVoice.name}): ${text}`);
+            } else {
+                log(`Speaking: ${text}`);
+            }
+
+            utterance.onend = () => {
+                // Resume audio player if it was playing
+                if (wasPlaying && translationEnabled) {
+                    audioPlayer.play().catch(err => log(`Resume play error: ${err.message}`));
+                }
+            };
+            utterance.onerror = (event) => log(`Speech error: ${event.error}`);
+
+            try {
+                window.speechSynthesis.speak(utterance);
+
+                // iOS Safari workaround: Force resume after a tiny delay
+                setTimeout(() => {
+                    if (window.speechSynthesis.paused) {
+                        window.speechSynthesis.resume();
+                    }
+                }, 100);
+            } catch (err) {
+                log(`Speech failed: ${err.message}`);
+                if (wasPlaying) {
+                    audioPlayer.play().catch(e => log(`Resume after error: ${e.message}`));
+                }
+            }
+        }
+
+        function initializeApp() {
+            if (isInitialized) return;
+            isInitialized = true;
+
+            socket = io(window.location.origin, { transports: ['websocket'] });
+            initializeWebRTC();
+
+            socket.on('connect', () => {
+                log('Connected to server');
+                socket.emit('listener');
+            });
+
+            socket.on('offer', async (offer) => {
+                try {
+                    if (!pc.remoteDescription) {
+                        await pc.setRemoteDescription(offer);
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+                        socket.emit('answer', answer);
+                        log('Answer sent');
+                    } else {
+                        log('Offer ignored, already have remote description');
+                    }
+                } catch (err) {
+                    log(`Error handling offer: ${err.message}`);
+                }
+            });
+
+            socket.on('ice-candidate', async (candidate) => {
+                try {
+                    if (pc.remoteDescription) {
+                        await pc.addIceCandidate(candidate);
+                        log('ICE candidate added');
+                    }
+                } catch (err) {
+                    log(`ICE candidate error: ${err.message}`);
+                }
+            });
+
+            socket.on('translated-text', (payload) => {
+                const text = typeof payload === 'string' ? payload : (payload && payload.text ? payload.text : '');
+                const lang = (payload && payload.lang) ? payload.lang : 'es';
+                log(`Translated text [${lang}]: ${text}`);
+                translatedTextDiv.textContent = text;
+                lastTranslatedText = text;
+                lastTranslatedLang = lang;
+                // Automatically speak if translation AND speech are both enabled
+                if (translationEnabled && speechEnabled && text) {
+                    speakText(text);
+                }
+            });
+
+            socket.on('translation-state', (state) => {
+                translationEnabled = state;
+                log(`Translation ${state ? 'enabled' : 'disabled'} by broadcaster`);
+
+                // When translation is ON: mute audio (but let user manually enable speech)
+                // When translation is OFF: unmute audio, disable speech
+                if (translationEnabled) {
+                    audioPlayer.muted = true;
+                    log('Audio muted - translation mode active');
+                    log('IMPORTANT: Tap the Auto-Speak button to enable translated speech');
+                } else {
+                    audioPlayer.muted = false;
+                    speechEnabled = false;
+                    speakButton.textContent = 'Auto-Speak: OFF';
+                    speakButton.style.background = 'linear-gradient(45deg, #dc3545, #c82333)';
+                    log('Audio unmuted - playing live audio');
+                }
+            });
+
+            socket.on('disconnect', () => log('Disconnected from server'));
+
+            playButton.addEventListener('click', togglePlayPause);
+            reloadButton.addEventListener('click', () => window.location.reload());
+            copyLogsButton.addEventListener('click', () => {
+                const logs = logTextarea.value;
+                navigator.clipboard.writeText(logs)
+                    .then(() => log('Logs copied to clipboard'))
+                    .catch(err => {
+                        log(`Clipboard error: ${err.message}`);
+                        logTextarea.style.display = 'block';
+                        selectAllButton.style.display = 'block';
+                        logTextarea.focus();
+                        log('Please copy the logs manually from the textarea below');
+                    });
+            });
+            selectAllButton.addEventListener('click', () => {
+                logTextarea.select();
+                log('Logs selected, please copy manually');
+                try {
+                    document.execCommand('copy');
+                    log('Logs copied to clipboard via fallback');
+                } catch (err) {
+                    log('Manual copy required: long-press the textarea and select "Copy"');
+                }
+            });
+            speakButton.addEventListener('click', () => {
+                speechEnabled = !speechEnabled;
+                speakButton.textContent = speechEnabled ? 'Auto-Speak: ON' : 'Auto-Speak: OFF';
+                speakButton.style.background = speechEnabled
+                    ? 'linear-gradient(45deg, #28a745, #218838)'
+                    : 'linear-gradient(45deg, #dc3545, #c82333)';
+                log(`Auto-speak ${speechEnabled ? 'enabled' : 'disabled'}`);
+
+                // iOS Safari fix: Prime speech synthesis with a direct user interaction
+                if (speechEnabled) {
+                    const primer = new SpeechSynthesisUtterance('');
+                    window.speechSynthesis.speak(primer);
+                }
+
+                // If turning on and there's text, speak it immediately
+                if (speechEnabled && lastTranslatedText) {
+                    speakText(lastTranslatedText);
+                }
+            });
+            volumeControl.addEventListener('input', () => {
+                audioPlayer.volume = volumeControl.value;
+                log(`Volume set to ${volumeControl.value}`);
+            });
+
+            audioPlayer.volume = volumeControl.value;
+
+            // Log available voices for debugging
+            window.speechSynthesis.onvoiceschanged = () => {
+                const voices = window.speechSynthesis.getVoices();
+                log('Available voices:');
+                voices.forEach(voice => log(`- ${voice.name} (${voice.lang})`));
+            };
+        }
+
+        document.addEventListener('DOMContentLoaded', initializeApp);
+    </script>
+</body>
+</html>

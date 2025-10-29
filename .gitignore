@@ -1,0 +1,67 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Electron
+dist/
+out/
+*.dmg
+*.zip
+*.exe
+*.deb
+*.AppImage
+
+# Google Cloud Credentials
+*.json
+!package.json
+!package-lock.json
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.whl
+
+# Audio files (keep test.mp3 but ignore others)
+*.wav
+*.flac
+*.ogg
+
+# Model files
+*.tar.gz
+en-us.tar.gz
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Environment variables
+.env
+.env.local

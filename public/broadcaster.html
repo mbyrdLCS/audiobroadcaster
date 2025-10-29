@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="">
+    <title>Audio Broadcaster</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            color: #fff;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            max-width: 450px;
+            width: 90%;
+            text-align: center;
+            transition: transform 0.3s ease;
+            position: relative;
+        }
+        .container:hover {
+            transform: translateY(-5px);
+        }
+        .logo {
+            width: 120px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            font-size: 2em;
+            margin-bottom: 15px;
+            color: #fff;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        select, input {
+            background: #fff;
+            border: none;
+            padding: 10px;
+            font-size: 1em;
+            border-radius: 10px;
+            margin: 10px 0;
+            width: 100%;
+            max-width: 300px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+        }
+        button {
+            background: linear-gradient(45deg, #00c6ff, #0072ff);
+            border: none;
+            padding: 12px 24px;
+            font-size: 1em;
+            color: #fff;
+            border-radius: 25px;
+            cursor: pointer;
+            margin: 5px;
+            transition: background 0.3s ease, transform 0.2s ease;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        button:hover {
+            background: linear-gradient(45deg, #0072ff, #00c6ff);
+            transform: scale(1.05);
+        }
+        #stop {
+            background: linear-gradient(45deg, #ff416c, #ff4b2b);
+        }
+        #stop:hover {
+            background: linear-gradient(45deg, #ff4b2b, #ff416c);
+        }
+        #donateButton {
+            background: linear-gradient(45deg, #fd7e14, #e65c00);
+            margin: 10px 0;
+            font-size: 0.9em;
+        }
+        #donateButton:hover {
+            background: linear-gradient(45deg, #e65c00, #fd7e14);
+        }
+        #copyLogs {
+            background: linear-gradient(45deg, #6f42c1, #5a32a8);
+            margin-top: 10px;
+        }
+        #copyLogs:hover {
+            background: linear-gradient(45deg, #5a32a8, #6f42c1);
+        }
+        #toggleTranslation {
+            background: linear-gradient(45deg, #28a745, #218838);
+        }
+        #toggleTranslation:hover {
+            background: linear-gradient(45deg, #218838, #28a745);
+        }
+        #serverInfo {
+            font-size: 0.9em;
+            color: #d0e1ff;
+            margin: 15px 0;
+        }
+        #serverInfo strong {
+            font-weight: bold;
+            color: #fff;
+        }
+        #serverInfo a {
+            color: #00c6ff;
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+        #serverInfo a:hover {
+            color: #0072ff;
+        }
+        #copyUrlButton {
+            background: linear-gradient(45deg, #fd7e14, #e65c00);
+            padding: 6px 12px;
+            font-size: 0.8em;
+            margin-left: 10px;
+            vertical-align: middle;
+        }
+        #copyUrlButton:hover {
+            background: linear-gradient(45deg, #e65c00, #fd7e14);
+        }
+        #debug {
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 15px;
+            padding: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 0.9em;
+            color: #e0e0e0;
+            margin-top: 20px;
+            text-align: left;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <img src="/Logo_primary_RGB.png" alt="ChurchApps Logo" class="logo">
+        <h1>Audio Broadcaster</h1>
+        <select id="sourceType">
+            <option value="microphone">Microphone</option>
+            <option value="file">Test MP3 File</option>
+        </select>
+        <select id="audioSource"></select>
+        <select id="targetLanguage">
+            <option value="es">Spanish (Español)</option>
+            <option value="fr">French (Français)</option>
+            <option value="de">German (Deutsch)</option>
+            <option value="zh">Chinese (中文)</option>
+            <option value="pt">Portuguese (Português)</option>
+            <option value="ru">Russian (Русский)</option>
+            <option value="ar">Arabic (العربية)</option>
+            <option value="ko">Korean (한국어)</option>
+            <option value="ja">Japanese (日本語)</option>
+            <option value="hi">Hindi (हिन्दी)</option>
+            <option value="it">Italian (Italiano)</option>
+        </select>
+        <button id="start">Start Broadcasting & Transcription</button>
+        <button id="stop" disabled>Stop Broadcasting</button>
+        <button id="toggleTranslation">Translation: ON</button>
+        <div id="serverInfo"><strong>Listeners can connect at:</strong> <span id="listenerUrl"></span><button id="copyUrlButton">Copy URL</button></div>
+        <button id="donateButton" onclick="window.open('https://churchapps.org/partner#give', '_blank')">Find this app useful? Please donate here</button>
+        <button id="copyLogs">Copy Logs</button>
+        <div id="debug"></div>
+    </div>
+
+    <script>
+        let socket;
+        const debug = document.getElementById('debug');
+        const peerConnections = new Map();
+        let audioContext = null;
+        let audioElement = null;
+        let sourceNode = null;
+        let streamDestination = null;
+        let translationEnabled = true;
+        const pendingListeners = new Set();
+
+        function log(msg) {
+            console.log(msg);
+            debug.innerHTML += `${new Date().toLocaleTimeString()}: ${msg}<br>`;
+            debug.scrollTop = debug.scrollHeight;
+        }
+
+        window.api.onServerInfo((info) => {
+            try {
+                if (!info || !info.ip || !info.port) throw new Error('Invalid server info');
+                const serverIp = info.ip;
+                const serverPort = info.port;
+                const serverUrl = `http://localhost:${serverPort}`;
+                const listenerUrl = `http://${serverIp}:${serverPort}/listen_v2.html`;
+                
+                document.querySelector('meta[http-equiv="Content-Security-Policy"]').setAttribute('content', 
+                    `default-src 'self' http://${serverIp}:* ws://${serverIp}:*; script-src 'self' https://cdn.socket.io 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; connect-src 'self' ws://${serverIp}:* http://${serverIp}:*`
+                );
+
+                document.getElementById('listenerUrl').innerHTML = `<a href="${listenerUrl}" target="_blank">${listenerUrl}</a>`;
+                log(`Connecting to server at ${serverUrl}`);
+                initializeSocket(serverUrl);
+            } catch (error) {
+                log(`Server connection error: ${error.message}`);
+            }
+        });
+
+        function initializeSocket(serverUrl) {
+            socket = io(serverUrl, {
+                transports: ['websocket'],
+                reconnection: true,
+                reconnectionAttempts: 5,
+                reconnectionDelay: 2000,
+                timeout: 10000
+            });
+            setupSocketListeners();
+            log('Socket initialized');
+        }
+
+        function setupSocketListeners() {
+            socket.on('connect', () => {
+                log(`Connected to server via ${socket.io.engine.transport.name}`);
+                socket.emit('broadcaster');
+                // set initial target language on connect
+                const initialLang = document.getElementById('targetLanguage').value;
+                socket.emit('set-target-language', initialLang);
+            });
+            socket.on('connect_error', (err) => log(`Socket connect error: ${err.message}`));
+            socket.on('new-listener', (listenerId) => {
+                if (!peerConnections.has(listenerId)) {
+                    log(`New listener: ${listenerId}`);
+                    initializeWebRTC(listenerId);
+                }
+            });
+            socket.on('answer', async (answer, listenerId) => {
+                const pc = peerConnections.get(listenerId);
+                if (pc && !pc.remoteDescription) {
+                    try {
+                        await pc.setRemoteDescription(answer);
+                        log(`Remote description set for ${listenerId}`);
+                        if (streamDestination) addTracksToPeerConnection(pc, listenerId);
+                    } catch (err) {
+                        log(`Error setting remote description: ${err.message}`);
+                    }
+                }
+            });
+            socket.on('ice-candidate', async (candidate, listenerId) => {
+                const pc = peerConnections.get(listenerId);
+                if (pc) {
+                    try {
+                        await pc.addIceCandidate(candidate);
+                        log(`ICE candidate added for ${listenerId}`);
+                    } catch (err) {
+                        log(`Error adding ICE candidate: ${err.message}`);
+                    }
+                }
+            });
+            socket.on('transcribed-text', (data) => {
+                log(`Transcribed: ${data.text}`);
+                const targetLang = document.getElementById('targetLanguage').value;
+                socket.emit('transcribed-text', { text: data.text, targetLang });
+            });
+            socket.on('translated-text', (payload) => {
+                const text = typeof payload === 'string' ? payload : (payload && payload.text ? payload.text : '');
+                const lang = (payload && payload.lang) ? payload.lang : '';
+                log(`Translated${lang ? ' [' + lang + ']' : ''}: ${text}`);
+            });
+            socket.on('disconnect', () => {
+                log('Disconnected from server');
+                stopStream();
+            });
+        }
+
+        async function initializeWebRTC(listenerId) {
+            if (peerConnections.has(listenerId)) {
+                log(`Listener ${listenerId} already exists, skipping initialization`);
+                return;
+            }
+
+            const pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+            peerConnections.set(listenerId, pc);
+
+            pc.onicecandidate = (e) => {
+                if (e.candidate) socket.emit('ice-candidate', e.candidate, listenerId);
+            };
+            pc.onconnectionstatechange = () => {
+                log(`Connection state for ${listenerId}: ${pc.connectionState}`);
+                if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+                    peerConnections.delete(listenerId);
+                    pc.close();
+                }
+            };
+
+            if (streamDestination) {
+                addTracksToPeerConnection(pc, listenerId);
+            } else {
+                pendingListeners.add(listenerId);
+                log(`No stream yet, listener ${listenerId} added to pending`);
+            }
+
+            const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
+            await pc.setLocalDescription(offer);
+            socket.emit('offer', offer, listenerId);
+            log(`Offer sent to ${listenerId}`);
+        }
+
+        function addTracksToPeerConnection(pc, listenerId) {
+            if (pc.signalingState === 'closed') return;
+            const stream = streamDestination.stream;
+            stream.getAudioTracks().forEach(track => {
+                if (!track.addedTo) track.addedTo = [];
+                if (!track.addedTo.includes(listenerId)) {
+                    log(`Adding track to ${listenerId}: ${track.id}`);
+                    pc.addTrack(track, stream);
+                    track.addedTo.push(listenerId);
+                }
+            });
+        }
+
+        async function startAudioStream(sourceType) {
+            try {
+                stopStream();
+                audioContext = new AudioContext({ sampleRate: 44100 });
+                await audioContext.resume();
+                streamDestination = audioContext.createMediaStreamDestination();
+                log('Audio context resumed');
+
+                if (sourceType === 'microphone') {
+                    const deviceId = document.getElementById('audioSource').value;
+                    try {
+                        const micStream = await navigator.mediaDevices.getUserMedia({
+                            audio: {
+                                deviceId: deviceId ? { exact: deviceId } : undefined,
+                                sampleRate: 16000,
+                                channelCount: 1
+                            }
+                        });
+                        sourceNode = audioContext.createMediaStreamSource(micStream);
+                        if (socket && socket.connected) {
+                            socket.emit('start-transcription');
+                            log('✓ Transcription started - speak into microphone');
+                        } else {
+                            log('⚠ Socket not connected, transcription unavailable');
+                        }
+                        log('✓ Microphone stream initialized');
+                    } catch (micError) {
+                        log(`❌ Microphone error: ${micError.message}`);
+                        if (micError.name === 'NotAllowedError') {
+                            log('❌ Microphone permission denied. Please allow microphone access in System Preferences > Security & Privacy > Microphone');
+                        }
+                        throw micError;
+                    }
+                } else {
+                    const response = await fetch('/test.mp3');
+                    if (!response.ok) throw new Error('Failed to fetch test.mp3');
+                    const blob = await response.blob();
+                    audioElement = new Audio(URL.createObjectURL(blob));
+                    audioElement.loop = true;
+
+                    await new Promise(resolve => {
+                        audioElement.oncanplaythrough = resolve;
+                        audioElement.onerror = () => { throw new Error('MP3 playback error'); };
+                    });
+                    await audioElement.play();
+                    sourceNode = audioContext.createMediaElementSource(audioElement);
+                    log('MP3 playback started');
+                }
+
+                sourceNode.connect(streamDestination);
+                log(`Stream initialized with ${streamDestination.stream.getAudioTracks().length} tracks`);
+
+                peerConnections.forEach((pc, listenerId) => {
+                    if (pc.signalingState !== 'closed') {
+                        addTracksToPeerConnection(pc, listenerId);
+                    }
+                });
+                pendingListeners.forEach(listenerId => {
+                    const pc = peerConnections.get(listenerId);
+                    if (pc) addTracksToPeerConnection(pc, listenerId);
+                });
+                pendingListeners.clear();
+            } catch (err) {
+                log(`Audio stream error: ${err.message}`);
+                stopStream();
+            }
+        }
+
+        function stopStream() {
+            if (sourceNode) sourceNode.disconnect();
+            if (streamDestination) streamDestination.stream.getTracks().forEach(track => track.stop());
+            if (audioElement) {
+                audioElement.pause();
+                audioElement.currentTime = 0;
+            }
+            if (audioContext) audioContext.close();
+            sourceNode = null;
+            streamDestination = null;
+            audioElement = null;
+            audioContext = null;
+            socket.emit('stop-transcription');
+            log('Stream stopped');
+        }
+
+        document.getElementById('start').addEventListener('click', async () => {
+            try {
+                const sourceType = document.getElementById('sourceType').value;
+                log(`Starting broadcast with source: ${sourceType}`);
+                await startAudioStream(sourceType);
+                // send current language when starting
+                socket.emit('set-target-language', document.getElementById('targetLanguage').value);
+                document.getElementById('start').disabled = true;
+                document.getElementById('stop').disabled = false;
+                log('Broadcasting started');
+            } catch (error) {
+                log(`Start error: ${error.message}`);
+            }
+        });
+
+        document.getElementById('stop').addEventListener('click', () => {
+            stopStream();
+            peerConnections.forEach(pc => pc.close());
+            peerConnections.clear();
+            pendingListeners.clear();
+            document.getElementById('start').disabled = false;
+            document.getElementById('stop').disabled = true;
+            log('Broadcasting stopped');
+        });
+
+        document.getElementById('sourceType').addEventListener('change', (e) => {
+            document.getElementById('audioSource').style.display = e.target.value === 'microphone' ? 'block' : 'none';
+            if (e.target.value === 'microphone') getAudioDevices();
+        });
+
+        // When the target language dropdown changes, inform the server
+        document.getElementById('targetLanguage').addEventListener('change', (e) => {
+            const lang = e.target.value;
+            socket.emit('set-target-language', lang);
+            log(`Target language changed to: ${lang}`);
+        });
+
+        document.getElementById('copyLogs').addEventListener('click', async () => {
+            const logs = debug.innerText;
+            try {
+                await navigator.clipboard.writeText(logs);
+                log('Logs copied');
+            } catch (err) {
+                log(`Clipboard error: ${err.message}`);
+            }
+        });
+
+        document.getElementById('copyUrlButton').addEventListener('click', async () => {
+            const url = document.getElementById('listenerUrl').querySelector('a').href;
+            try {
+                await navigator.clipboard.writeText(url);
+                log('URL copied');
+            } catch (err) {
+                log(`Clipboard error: ${err.message}`);
+            }
+        });
+
+        document.getElementById('toggleTranslation').addEventListener('click', () => {
+            translationEnabled = !translationEnabled;
+            socket.emit('toggle-translation', translationEnabled);
+            document.getElementById('toggleTranslation').textContent = `Translation: ${translationEnabled ? 'ON' : 'OFF'}`;
+            document.getElementById('toggleTranslation').style.background = translationEnabled
+                ? 'linear-gradient(45deg, #28a745, #218838)'
+                : 'linear-gradient(45deg, #dc3545, #c82333)';
+            log(`Translation ${translationEnabled ? 'enabled' : 'disabled'}`);
+        });
+
+        async function getAudioDevices() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioSelect = document.getElementById('audioSource');
+                audioSelect.innerHTML = '';
+                devices.forEach(device => {
+                    if (device.kind === 'audioinput') {
+                        const option = document.createElement('option');
+                        option.value = device.deviceId;
+                        option.text = device.label || `Mic ${audioSelect.length + 1}`;
+                        audioSelect.appendChild(option);
+                    }
+                });
+                log(`Found ${audioSelect.options.length} audio devices`);
+            } catch (err) {
+                log(`Error getting audio devices: ${err.message}`);
+            }
+        }
+
+        log('Initializing broadcaster...');
+        getAudioDevices();
+    </script>
+</body>
+</html>

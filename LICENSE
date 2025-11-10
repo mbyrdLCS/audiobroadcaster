@@ -1,36 +1,40 @@
-Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License
+NON-COMMERCIAL LICENSE WITH DONATION BUTTON REQUIREMENT
 
-Copyright (c) 2025 MJB
+Copyright (c) 2025 Micheal Byrd
 
-This work is licensed under the Creative Commons Attribution-NonCommercial-ShareAlike 4.0
-International License. To view a copy of this license, visit
-http://creativecommons.org/licenses/by-nc-sa/4.0/
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to use,
+copy, modify, and distribute the Software for NON-COMMERCIAL purposes only,
+subject to the following conditions:
 
-You are free to:
-- Share: copy and redistribute the material in any medium or format
-- Adapt: remix, transform, and build upon the material
+1. DONATION BUTTON REQUIREMENT:
+   Any distribution, modification, or deployment of this software must maintain
+   a visible donation button linking to ChurchApps.org (https://churchapps.org)
+   in the user interface. This donation button must be clearly visible to end
+   users and cannot be obscured or removed.
 
-Under the following terms:
-- Attribution: You must give appropriate credit, provide a link to the license, and indicate
-  if changes were made.
-- NonCommercial: You may not use the material for commercial purposes. This includes but is
-  not limited to selling the software or using it in a commercial service.
-- ShareAlike: If you remix, transform, or build upon the material, you must distribute your
-  contributions under the same license as the original.
+2. NON-COMMERCIAL USE ONLY:
+   You may NOT use this software or any derivative works for commercial purposes,
+   including but not limited to:
+   - Selling the software or access to it
+   - Using it as part of a commercial service
+   - Charging fees for its use or deployment
+   - Including it in commercial products
 
-This software is provided "as is", without warranty of any kind, express or implied,
-including but not limited to the warranties of merchantability, fitness for a particular
-purpose and noninfringement.
+3. SHARE-ALIKE:
+   Any modifications or derivative works must be distributed under the same
+   license terms.
 
-PERMITTED USES:
-- Churches, religious organizations, and non-profit entities
-- Educational institutions
-- Personal use
-- Research and development
+4. COPYRIGHT NOTICE:
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
 
-PROHIBITED USES:
-- Commercial sale of the software
-- Use in commercial products or services
-- Any use that generates revenue or profit
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
-For commercial licensing inquiries, please contact the author.
+For commercial use inquiries, please contact: micheal@livechurchsolutions.org

@@ -1,6 +1,11 @@
-# Audio Broadcaster
+# 🎙️ Audio Broadcaster
 
 A real-time audio broadcasting application with live speech-to-text transcription and translation capabilities. Built with Electron, Node.js, and Python.
+
+[![License](https://img.shields.io/badge/License-Non--Commercial-blue.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-16%2B-green)](https://nodejs.org/)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
+[![Electron](https://img.shields.io/badge/Electron-Desktop%20App-47848F)](https://www.electronjs.org/)
 
 ## Features
 
@@ -217,22 +222,57 @@ PORT=3000 npm start
 - Translation requires internet (MyMemory API has daily limit of 1000 words for anonymous usage)
 - WebRTC connections may require network configuration for remote access
 
-## Contributing
+## 📄 License
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+This project is licensed under a **Non-Commercial License with Donation Button Requirement**.
 
-## License
+**Key Points:**
+- ✅ Free to use for churches and non-profit organizations
+- ✅ Can modify and adapt for your needs
+- ✅ Must keep ChurchApps.org donation button visible
+- ❌ Cannot sell or use commercially
+- ❌ Cannot remove donation button
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+See [LICENSE](LICENSE) file for full details.
 
-## Acknowledgments
+For commercial licensing inquiries, contact: micheal@livechurchsolutions.org
 
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+### Development Guidelines
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Test your changes thoroughly
+4. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+5. Push to the branch (`git push origin feature/AmazingFeature`)
+6. Open a Pull Request
+
+## 💡 Support & Questions
+
+- **Issues**: GitHub Issues
+- **Email**: micheal@livechurchsolutions.org
+- **ChurchApps**: [churchapps.org](https://churchapps.org)
+
+## 🙏 Acknowledgments
+
+- Built with ❤️ for churches and non-profit organizations
 - MyMemory Translation API for free translation services
 - Google Speech Recognition (free tier)
 - The Electron, Node.js, and Python communities
 - WebRTC for real-time communication
-- Built for churches and non-profit organizations
+- Thanks to all contributors and organizations using this system
 
-## Support
+## 📈 Roadmap
 
-For issues, questions, or contributions, please open an issue on the GitHub repository.
+- [ ] Multi-language UI support
+- [ ] Recording and playback features
+- [ ] Advanced audio mixing controls
+- [ ] Mobile app for iOS/Android
+- [ ] Cloud-based audio relay for larger audiences
+- [ ] Integration with streaming platforms
+
+---
+
+**Made with ❤️ for churches and ministry**

@@ -10,14 +10,19 @@ import json
 # ============================================================================
 # CONFIGURATION: Choose your transcription mode
 # ============================================================================
-# Set to 'online' for Google's free Web Speech API (requires internet)
+# Set to 'online'  for Google's free Web Speech API (requires internet)
 # Set to 'offline' for Vosk (no internet required, fully open source)
-TRANSCRIPTION_MODE = 'online'  # Change to 'offline' for offline mode
+# Set to 'whisper' for faster-whisper (offline, much more accurate, recommended)
+TRANSCRIPTION_MODE = 'online'  # Change to 'offline', 'whisper', etc.
 
 # For offline mode: Path to Vosk model directory
 # Download models from: https://alphacephei.com/vosk/models
 # Recommended: vosk-model-small-en-us-0.15 (39 MB) for English
 VOSK_MODEL_PATH = os.path.join(os.path.dirname(__file__), 'vosk-model')
+
+# For whisper mode: model size (tiny.en, base.en, small.en)
+# base.en is the recommended sweet spot for accuracy vs. speed
+WHISPER_MODEL_SIZE = 'base.en'
 
 # ============================================================================
 
@@ -43,11 +48,19 @@ def find_macbook_pro_mic():
             print(f"Found MacBook Pro Microphone at index {i}", file=sys.stderr)
             return i
     print("MacBook Pro Microphone not found, falling back to default input device", file=sys.stderr)
-    return sd.default.device['input']
+    default_device = sd.default.device
+    # sd.default.device can be an int, a tuple (in, out), or a dict depending on version
+    if isinstance(default_device, dict):
+        return default_device['input']
+    elif isinstance(default_device, (list, tuple)):
+        return default_device[0]
+    else:
+        return int(default_device)
 
 # Set device (default to MacBook Pro Microphone or fallback)
 device_index = find_macbook_pro_mic()
-device_info = get_device_info(device_index) or sd.query_devices()[sd.default.device['input']]
+_fallback_idx = device_index if device_index is not None else 0
+device_info = get_device_info(device_index) or sd.query_devices()[_fallback_idx]
 channels = device_info['max_input_channels'] if device_info['max_input_channels'] > 0 else 1
 samplerate = 16000
 
@@ -58,39 +71,11 @@ sd.default.device = device_index
 print(f"Using device {device_index} ({device_info['name']}) with {channels} channels, samplerate={samplerate}", file=sys.stderr)
 print("Available audio devices:", sd.query_devices(), file=sys.stderr)
 
-# Test audio input
-def test_audio_input():
-    print("Testing audio input for 5 seconds...", file=sys.stderr)
-    print("Please speak loudly into the microphone during this test.", file=sys.stderr)
-    def callback(indata, frames, time, status):
-        if status:
-            print(f"Audio callback status: {status}", file=sys.stderr)
-        try:
-            # Amplify the input signal by a factor of 20
-            indata_amplified = indata * 20
-            volume = sum(abs(sample) for sample in indata_amplified.flatten()) / len(indata_amplified.flatten())
-            print(f"Volume: {volume:.4f}", file=sys.stderr)
-        except Exception as e:
-            print(f"Error calculating volume: {e}", file=sys.stderr)
-
-    try:
-        print(f"Attempting to open audio stream with device={device_index}, channels={channels}, samplerate={samplerate}", file=sys.stderr)
-        with sd.InputStream(samplerate=samplerate, channels=channels, device=device_index, callback=callback):
-            print("Audio stream started successfully", file=sys.stderr)
-            time.sleep(5)
-        print("Audio stream closed successfully", file=sys.stderr)
-    except Exception as e:
-        print(f"Audio input test failed: {e}", file=sys.stderr)
-        print("Please check microphone permissions and device index.", file=sys.stderr)
-    print("Audio input test complete", file=sys.stderr)
-
-# Commented out automatic test - it was blocking the transcription loop
-# test_audio_input()
-
 # Initialize speech recognizer based on mode
 recognizer = sr.Recognizer()
 vosk_model = None
 vosk_recognizer = None
+whisper_model = None
 
 if TRANSCRIPTION_MODE == 'offline':
     try:
@@ -108,6 +93,17 @@ if TRANSCRIPTION_MODE == 'offline':
             print(f"Vosk model loaded successfully - OFFLINE MODE ACTIVE", file=sys.stderr)
     except ImportError:
         print("ERROR: Vosk not installed. Run: pip install vosk", file=sys.stderr)
+        print("Falling back to online mode...", file=sys.stderr)
+        TRANSCRIPTION_MODE = 'online'
+
+elif TRANSCRIPTION_MODE == 'whisper':
+    try:
+        from faster_whisper import WhisperModel
+        print(f"Loading Whisper model: {WHISPER_MODEL_SIZE} ...", file=sys.stderr)
+        whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+        print(f"Whisper model loaded successfully - WHISPER MODE ACTIVE", file=sys.stderr)
+    except ImportError:
+        print("ERROR: faster-whisper not installed. Run: pip install faster-whisper", file=sys.stderr)
         print("Falling back to online mode...", file=sys.stderr)
         TRANSCRIPTION_MODE = 'online'
 
@@ -168,7 +164,6 @@ try:
                                 print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)
                                 filtered_transcript = remove_repetitive_words(transcript)
                                 print(filtered_transcript, flush=True)
-                                time.sleep(0.5)
                         except sr.WaitTimeoutError:
                             print("DEBUG: No speech detected within timeout", file=sys.stderr)
                         except sr.UnknownValueError:
@@ -177,6 +172,29 @@ try:
                             print(f"Speech recognition error: {e}", file=sys.stderr)
                         except Exception as e:
                             print(f"Unexpected error: {e}", file=sys.stderr)
+
+            elif TRANSCRIPTION_MODE == 'whisper':
+                # WHISPER MODE: Using faster-whisper (offline, highly accurate)
+                print("Starting offline transcription with Whisper...", file=sys.stderr)
+                audio_buffer = []
+                with sd.InputStream(samplerate=16000, channels=1, dtype='int16', device=device_index) as stream:
+                    print("Whisper stream opened, listening...", file=sys.stderr)
+                    while listening and not stop_event.is_set():
+                        try:
+                            chunk, _ = stream.read(8000)  # 0.5s chunks
+                            audio_buffer.append(chunk.flatten())
+                            if sum(len(c) for c in audio_buffer) >= 16000 * 5:  # 5 sec
+                                audio_np = np.concatenate(audio_buffer).astype(np.float32) / 32768.0
+                                audio_buffer = []
+                                segments, _ = whisper_model.transcribe(audio_np, beam_size=5, language='en')
+                                transcript = ' '.join(s.text.strip() for s in segments).strip()
+                                if transcript:
+                                    print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)
+                                    filtered_transcript = remove_repetitive_words(transcript)
+                                    if filtered_transcript:
+                                        print(filtered_transcript, flush=True)
+                        except Exception as e:
+                            print(f"Whisper error: {e}", file=sys.stderr)
 
             else:
                 # OFFLINE MODE: Using Vosk
@@ -196,7 +214,6 @@ try:
                                     filtered_transcript = remove_repetitive_words(transcript)
                                     if filtered_transcript:
                                         print(filtered_transcript, flush=True)
-                                        time.sleep(0.5)
                         except Exception as e:
                             print(f"Vosk error: {e}", file=sys.stderr)
         else:

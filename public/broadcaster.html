@@ -91,6 +91,31 @@
         #copyLogs:hover {
             background: linear-gradient(45deg, #5a32a8, #6f42c1);
         }
+        #transcriptionBox {
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 12px;
+            padding: 12px 16px;
+            margin: 12px 0;
+            min-height: 48px;
+            text-align: left;
+            font-size: 1em;
+            line-height: 1.5;
+        }
+        #transcriptionBox .label {
+            font-size: 0.75em;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #90b8ff;
+            margin-bottom: 4px;
+        }
+        #transcriptionBox .original {
+            color: #fff;
+        }
+        #listenerCount {
+            font-size: 0.85em;
+            color: #d0e1ff;
+            margin: 4px 0 12px;
+        }
         #toggleTranslation {
             background: linear-gradient(45deg, #28a745, #218838);
         }
@@ -147,24 +172,16 @@
             <option value="file">Test MP3 File</option>
         </select>
         <select id="audioSource"></select>
-        <select id="targetLanguage">
-            <option value="es">Spanish (Español)</option>
-            <option value="fr">French (Français)</option>
-            <option value="de">German (Deutsch)</option>
-            <option value="zh">Chinese (中文)</option>
-            <option value="pt">Portuguese (Português)</option>
-            <option value="ru">Russian (Русский)</option>
-            <option value="ar">Arabic (العربية)</option>
-            <option value="ko">Korean (한국어)</option>
-            <option value="ja">Japanese (日本語)</option>
-            <option value="hi">Hindi (हिन्दी)</option>
-            <option value="it">Italian (Italiano)</option>
-        </select>
         <button id="start">Start Broadcasting & Transcription</button>
         <button id="stop" disabled>Stop Broadcasting</button>
         <button id="toggleTranslation">Translation: ON</button>
         <div id="serverInfo"><strong>Listeners can connect at:</strong> <span id="listenerUrl"></span><button id="copyUrlButton">Copy URL</button></div>
-        <button id="donateButton" onclick="window.open('https://churchapps.org/partner#give', '_blank')">Find this app useful? Please donate here</button>
+        <div id="listenerCount">Listeners: 0</div>
+        <div id="transcriptionBox">
+            <div class="label">Transcription</div>
+            <div class="original" id="originalText">—</div>
+        </div>
+        <button id="donateButton" onclick="window.open('https://churchapps.org/partner#give', '_blank')" rel="noopener noreferrer">Find this app useful? Please donate here</button>
         <button id="copyLogs">Copy Logs</button>
         <div id="debug"></div>
     </div>
@@ -182,8 +199,15 @@
 
         function log(msg) {
             console.log(msg);
-            debug.innerHTML += `${new Date().toLocaleTimeString()}: ${msg}<br>`;
+            const line = document.createElement('span');
+            line.textContent = `${new Date().toLocaleTimeString()}: ${msg}`;
+            debug.appendChild(line);
+            debug.appendChild(document.createElement('br'));
             debug.scrollTop = debug.scrollHeight;
+        }
+
+        function updateListenerCount() {
+            document.getElementById('listenerCount').textContent = `Listeners: ${peerConnections.size}`;
         }
 
         window.api.onServerInfo((info) => {
@@ -222,24 +246,21 @@
             socket.on('connect', () => {
                 log(`Connected to server via ${socket.io.engine.transport.name}`);
                 socket.emit('broadcaster');
-                // set initial target language on connect
-                const initialLang = document.getElementById('targetLanguage').value;
-                socket.emit('set-target-language', initialLang);
             });
             socket.on('connect_error', (err) => log(`Socket connect error: ${err.message}`));
             socket.on('new-listener', (listenerId) => {
                 if (!peerConnections.has(listenerId)) {
                     log(`New listener: ${listenerId}`);
                     initializeWebRTC(listenerId);
+                    updateListenerCount();
                 }
             });
             socket.on('answer', async (answer, listenerId) => {
                 const pc = peerConnections.get(listenerId);
-                if (pc && !pc.remoteDescription) {
+                if (pc) {
                     try {
                         await pc.setRemoteDescription(answer);
                         log(`Remote description set for ${listenerId}`);
-                        if (streamDestination) addTracksToPeerConnection(pc, listenerId);
                     } catch (err) {
                         log(`Error setting remote description: ${err.message}`);
                     }
@@ -258,13 +279,7 @@
             });
             socket.on('transcribed-text', (data) => {
                 log(`Transcribed: ${data.text}`);
-                const targetLang = document.getElementById('targetLanguage').value;
-                socket.emit('transcribed-text', { text: data.text, targetLang });
-            });
-            socket.on('translated-text', (payload) => {
-                const text = typeof payload === 'string' ? payload : (payload && payload.text ? payload.text : '');
-                const lang = (payload && payload.lang) ? payload.lang : '';
-                log(`Translated${lang ? ' [' + lang + ']' : ''}: ${text}`);
+                document.getElementById('originalText').textContent = data.text;
             });
             socket.on('disconnect', () => {
                 log('Disconnected from server');
@@ -291,20 +306,34 @@
                 if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
                     peerConnections.delete(listenerId);
                     pc.close();
+                    updateListenerCount();
+                }
+            };
+            // Handles both initial offer and renegotiation when tracks are added later
+            pc.onnegotiationneeded = async () => {
+                if (pc.signalingState !== 'stable') return;
+                try {
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    socket.emit('offer', offer, listenerId);
+                    log(`Offer sent to ${listenerId}`);
+                } catch (err) {
+                    log(`Negotiation error: ${err.message}`);
                 }
             };
 
             if (streamDestination) {
                 addTracksToPeerConnection(pc, listenerId);
+                // onnegotiationneeded fires automatically with tracks
             } else {
                 pendingListeners.add(listenerId);
                 log(`No stream yet, listener ${listenerId} added to pending`);
+                // Send initial offer so listener sets up its end
+                const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
+                await pc.setLocalDescription(offer);
+                socket.emit('offer', offer, listenerId);
+                log(`Offer sent to ${listenerId}`);
             }
-
-            const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
-            await pc.setLocalDescription(offer);
-            socket.emit('offer', offer, listenerId);
-            log(`Offer sent to ${listenerId}`);
         }
 
         function addTracksToPeerConnection(pc, listenerId) {
@@ -400,7 +429,7 @@
             streamDestination = null;
             audioElement = null;
             audioContext = null;
-            socket.emit('stop-transcription');
+            if (socket && socket.connected) socket.emit('stop-transcription');
             log('Stream stopped');
         }
 
@@ -409,8 +438,6 @@
                 const sourceType = document.getElementById('sourceType').value;
                 log(`Starting broadcast with source: ${sourceType}`);
                 await startAudioStream(sourceType);
-                // send current language when starting
-                socket.emit('set-target-language', document.getElementById('targetLanguage').value);
                 document.getElementById('start').disabled = true;
                 document.getElementById('stop').disabled = false;
                 log('Broadcasting started');
@@ -424,6 +451,7 @@
             peerConnections.forEach(pc => pc.close());
             peerConnections.clear();
             pendingListeners.clear();
+            updateListenerCount();
             document.getElementById('start').disabled = false;
             document.getElementById('stop').disabled = true;
             log('Broadcasting stopped');
@@ -432,13 +460,6 @@
         document.getElementById('sourceType').addEventListener('change', (e) => {
             document.getElementById('audioSource').style.display = e.target.value === 'microphone' ? 'block' : 'none';
             if (e.target.value === 'microphone') getAudioDevices();
-        });
-
-        // When the target language dropdown changes, inform the server
-        document.getElementById('targetLanguage').addEventListener('change', (e) => {
-            const lang = e.target.value;
-            socket.emit('set-target-language', lang);
-            log(`Target language changed to: ${lang}`);
         });
 
         document.getElementById('copyLogs').addEventListener('click', async () => {

@@ -54,6 +54,19 @@
             background: #fff;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
         }
+        select {
+            background: #fff;
+            border: none;
+            padding: 10px;
+            font-size: 1em;
+            border-radius: 10px;
+            margin: 10px 0;
+            width: 100%;
+            max-width: 300px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+            color: #333;
+        }
         button {
             background: linear-gradient(45deg, #00c6ff, #0072ff);
             border: none;
@@ -75,6 +88,14 @@
         }
         #speakButton:hover {
             background: linear-gradient(45deg, #c82333, #dc3545);
+        }
+        @keyframes pulse-speak {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0.7); transform: scale(1); }
+            50% { box-shadow: 0 0 0 10px rgba(40, 167, 69, 0); transform: scale(1.05); }
+        }
+        #speakButton.needs-tap {
+            background: linear-gradient(45deg, #28a745, #218838) !important;
+            animation: pulse-speak 1.2s ease-in-out infinite;
         }
         #volumeControl {
             width: 100%;
@@ -156,6 +177,20 @@
         <button id="reloadButton">Reload</button>
         <button id="copyLogs">Copy Logs</button>
         <button id="speakButton">Auto-Speak: OFF</button>
+        <select id="targetLanguage">
+            <option value="en">English (no translation)</option>
+            <option value="es">Spanish (Español)</option>
+            <option value="fr">French (Français)</option>
+            <option value="de">German (Deutsch)</option>
+            <option value="zh">Chinese (中文)</option>
+            <option value="pt">Portuguese (Português)</option>
+            <option value="ru">Russian (Русский)</option>
+            <option value="ar">Arabic (العربية)</option>
+            <option value="ko">Korean (한국어)</option>
+            <option value="ja">Japanese (日本語)</option>
+            <option value="hi">Hindi (हिन्दी)</option>
+            <option value="it">Italian (Italiano)</option>
+        </select>
         <input type="range" id="volumeControl" min="0" max="1" step="0.01" value="1">
         <div id="translatedText"></div>
         <textarea id="logTextarea" readonly></textarea>
@@ -164,6 +199,9 @@
     </div>
 
     <script>
+        // Optional: Set your email for 10x MyMemory rate limit (10,000 words/day vs 1,000)
+        const MYMEMORY_EMAIL = '';
+
         let socket;
         const audioPlayer = document.getElementById('audioPlayer');
         const debug = document.getElementById('debug');
@@ -179,9 +217,45 @@
         let hasInteracted = false;
         let isInitialized = false;
         let lastTranslatedText = '';
-        let lastTranslatedLang = 'es';
+        let lastTranslatedLang = 'en';
         let speechEnabled = false;
         let translationEnabled = false; // Will be set by translation-state event from server
+
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+        // Cache voices — Chrome (Android) loads them async via onvoiceschanged
+        let cachedVoices = window.speechSynthesis.getVoices();
+        window.speechSynthesis.onvoiceschanged = () => {
+            cachedVoices = window.speechSynthesis.getVoices();
+        };
+
+        // iOS must pause() to release the audio session for TTS to be heard.
+        // Android doesn't have that conflict — muting is enough and avoids stream buffering issues.
+        function pauseAudioForTTS() {
+            if (isIOS) audioPlayer.pause();
+            else audioPlayer.muted = true;
+        }
+        function resumeAudioAfterTTS() {
+            audioPlayer.muted = false;
+            if (isIOS) audioPlayer.play().catch(() => {});
+        }
+
+        async function translateText(text, lang) {
+            if (!text || lang === 'en') return text;
+            try {
+                let url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|${lang}`;
+                if (MYMEMORY_EMAIL) url += `&de=${encodeURIComponent(MYMEMORY_EMAIL)}`;
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 5000);
+                const res = await fetch(url, { signal: controller.signal });
+                clearTimeout(timeout);
+                const data = await res.json();
+                return data?.responseData?.translatedText || text;
+            } catch (e) {
+                log(`Translation error: ${e.message}`);
+                return text;
+            }
+        }
 
         function log(message) {
             const now = new Date().toLocaleTimeString();
@@ -209,9 +283,10 @@
                 mediaStream = event.streams[0];
                 log(`Stream tracks: ${mediaStream.getAudioTracks().length}`);
                 audioPlayer.srcObject = mediaStream;
-                // Don't set mute state here - let translation-state event control it
                 audioPlayer.volume = volumeControl.value;
-                if (hasInteracted) {
+                // Don't play raw audio if Auto-Speak is active (listener wants TTS only)
+                if (hasInteracted && !(speechEnabled && translationEnabled)) {
+                    audioPlayer.muted = false;
                     audioPlayer.play().then(() => log('Audio playing'))
                         .catch(err => log(`Play error: ${err.message}`));
                 }
@@ -250,56 +325,61 @@
             }
         }
 
-        function speakText(text) {
-            // Cancel any ongoing speech
-            window.speechSynthesis.cancel();
+        let speechResumeInterval = null;
 
-            // iOS Safari fix: Pause audio player briefly to allow speech to play
-            const wasPlaying = !audioPlayer.paused;
-            if (wasPlaying) {
-                audioPlayer.pause();
-            }
+        function speakText(text) {
+            window.speechSynthesis.cancel();
+            if (speechResumeInterval) { clearInterval(speechResumeInterval); speechResumeInterval = null; }
+
+            pauseAudioForTTS();
 
             const utterance = new SpeechSynthesisUtterance(text);
-            // map BCP-47 where possible, default region fallback
             const region = lastTranslatedLang === 'zh' ? 'CN' : (lastTranslatedLang === 'pt' ? 'BR' : lastTranslatedLang.toUpperCase());
             utterance.lang = `${lastTranslatedLang}-${region}`;
 
-            // List available voices and select a voice for the target language
-            const voices = window.speechSynthesis.getVoices();
-            const matchedVoice = voices.find(voice => voice.lang.toLowerCase().startsWith(lastTranslatedLang.toLowerCase()))
-                || voices.find(voice => voice.lang.toLowerCase().includes(lastTranslatedLang.toLowerCase()));
+            const matchedVoice = cachedVoices.find(v => v.lang.toLowerCase().startsWith(lastTranslatedLang.toLowerCase()))
+                || cachedVoices.find(v => v.lang.toLowerCase().includes(lastTranslatedLang.toLowerCase()));
             if (matchedVoice) {
                 utterance.voice = matchedVoice;
                 log(`Speaking (${matchedVoice.name}): ${text}`);
             } else {
-                log(`Speaking: ${text}`);
+                log(`Speaking [${lastTranslatedLang}]: ${text}`);
             }
 
             utterance.onend = () => {
-                // Resume audio player if it was playing
-                if (wasPlaying && translationEnabled) {
-                    audioPlayer.play().catch(err => log(`Resume play error: ${err.message}`));
-                }
+                if (speechResumeInterval) { clearInterval(speechResumeInterval); speechResumeInterval = null; }
+                if (!speechEnabled) resumeAudioAfterTTS();
             };
-            utterance.onerror = (event) => log(`Speech error: ${event.error}`);
+            utterance.onerror = (event) => {
+                if (speechResumeInterval) { clearInterval(speechResumeInterval); speechResumeInterval = null; }
+                log(`Speech error: ${event.error}`);
+                if (!speechEnabled) resumeAudioAfterTTS();
+            };
 
             try {
                 window.speechSynthesis.speak(utterance);
-
-                // iOS Safari workaround: Force resume after a tiny delay
-                setTimeout(() => {
-                    if (window.speechSynthesis.paused) {
-                        window.speechSynthesis.resume();
-                    }
-                }, 100);
+                // iOS Safari randomly pauses itself mid-sentence — poll and resume
+                if (isIOS) {
+                    speechResumeInterval = setInterval(() => {
+                        if (!window.speechSynthesis.speaking) {
+                            clearInterval(speechResumeInterval); speechResumeInterval = null;
+                        } else if (window.speechSynthesis.paused) {
+                            window.speechSynthesis.resume();
+                        }
+                    }, 250);
+                }
             } catch (err) {
                 log(`Speech failed: ${err.message}`);
-                if (wasPlaying) {
-                    audioPlayer.play().catch(e => log(`Resume after error: ${e.message}`));
-                }
+                if (!speechEnabled) resumeAudioAfterTTS();
             }
         }
+
+        // iOS requires speech synthesis to be primed from a direct user touch.
+        // Prime it on the very first touch anywhere on the page.
+        document.body.addEventListener('touchstart', () => {
+            const primer = new SpeechSynthesisUtterance('');
+            window.speechSynthesis.speak(primer);
+        }, { once: true, passive: true });
 
         function initializeApp() {
             if (isInitialized) return;
@@ -315,15 +395,11 @@
 
             socket.on('offer', async (offer) => {
                 try {
-                    if (!pc.remoteDescription) {
-                        await pc.setRemoteDescription(offer);
-                        const answer = await pc.createAnswer();
-                        await pc.setLocalDescription(answer);
-                        socket.emit('answer', answer);
-                        log('Answer sent');
-                    } else {
-                        log('Offer ignored, already have remote description');
-                    }
+                    await pc.setRemoteDescription(offer);
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    socket.emit('answer', answer);
+                    log('Answer sent');
                 } catch (err) {
                     log(`Error handling offer: ${err.message}`);
                 }
@@ -340,35 +416,25 @@
                 }
             });
 
-            socket.on('translated-text', (payload) => {
-                const text = typeof payload === 'string' ? payload : (payload && payload.text ? payload.text : '');
-                const lang = (payload && payload.lang) ? payload.lang : 'es';
-                log(`Translated text [${lang}]: ${text}`);
-                translatedTextDiv.textContent = text;
-                lastTranslatedText = text;
+            socket.on('transcribed-text', async ({ text }) => {
+                const lang = document.getElementById('targetLanguage').value;
+                // Silence raw audio immediately (before async translation) so English doesn't bleed through
+                if (speechEnabled && translationEnabled) pauseAudioForTTS();
+                const translated = await translateText(text, lang);
+                log(`Transcribed [${lang}]: ${translated}`);
+                translatedTextDiv.textContent = translated;
+                lastTranslatedText = translated;
                 lastTranslatedLang = lang;
-                // Automatically speak if translation AND speech are both enabled
-                if (translationEnabled && speechEnabled && text) {
-                    speakText(text);
-                }
+                if (speechEnabled && translated) speakText(translated);
             });
 
             socket.on('translation-state', (state) => {
                 translationEnabled = state;
                 log(`Translation ${state ? 'enabled' : 'disabled'} by broadcaster`);
-
-                // When translation is ON: mute audio (but let user manually enable speech)
-                // When translation is OFF: unmute audio, disable speech
-                if (translationEnabled) {
-                    audioPlayer.muted = true;
-                    log('Audio muted - translation mode active');
-                    log('IMPORTANT: Tap the Auto-Speak button to enable translated speech');
-                } else {
-                    audioPlayer.muted = false;
-                    speechEnabled = false;
-                    speakButton.textContent = 'Auto-Speak: OFF';
-                    speakButton.style.background = 'linear-gradient(45deg, #dc3545, #c82333)';
-                    log('Audio unmuted - playing live audio');
+                translatedTextDiv.style.display = state ? '' : 'none';
+                if (!state) {
+                    translatedTextDiv.textContent = '';
+                    resumeAudioAfterTTS();
                 }
             });
 
@@ -378,15 +444,22 @@
             reloadButton.addEventListener('click', () => window.location.reload());
             copyLogsButton.addEventListener('click', () => {
                 const logs = logTextarea.value;
-                navigator.clipboard.writeText(logs)
-                    .then(() => log('Logs copied to clipboard'))
-                    .catch(err => {
-                        log(`Clipboard error: ${err.message}`);
-                        logTextarea.style.display = 'block';
-                        selectAllButton.style.display = 'block';
-                        logTextarea.focus();
-                        log('Please copy the logs manually from the textarea below');
-                    });
+                if (navigator.clipboard) {
+                    navigator.clipboard.writeText(logs)
+                        .then(() => log('Logs copied to clipboard'))
+                        .catch(() => fallbackCopy());
+                } else {
+                    fallbackCopy();
+                }
+                function fallbackCopy() {
+                    logTextarea.select();
+                    try {
+                        document.execCommand('copy');
+                        log('Logs copied');
+                    } catch {
+                        log('Long-press the log area below and select Copy');
+                    }
+                }
             });
             selectAllButton.addEventListener('click', () => {
                 logTextarea.select();
@@ -399,14 +472,22 @@
                 }
             });
             speakButton.addEventListener('click', () => {
-                speechEnabled = !speechEnabled;
+                // If pulsing (waiting for first tap), treat this click as "enable"
+                const wasPulsing = speakButton.classList.contains('needs-tap');
+                speechEnabled = wasPulsing ? true : !speechEnabled;
+                speakButton.classList.remove('needs-tap');
                 speakButton.textContent = speechEnabled ? 'Auto-Speak: ON' : 'Auto-Speak: OFF';
                 speakButton.style.background = speechEnabled
                     ? 'linear-gradient(45deg, #28a745, #218838)'
                     : 'linear-gradient(45deg, #dc3545, #c82333)';
+                if (speechEnabled && translationEnabled) {
+                    pauseAudioForTTS();
+                } else {
+                    resumeAudioAfterTTS();
+                }
                 log(`Auto-speak ${speechEnabled ? 'enabled' : 'disabled'}`);
 
-                // iOS Safari fix: Prime speech synthesis with a direct user interaction
+                // iOS Safari fix: Prime speech synthesis with a direct user interaction (click = trusted gesture)
                 if (speechEnabled) {
                     const primer = new SpeechSynthesisUtterance('');
                     window.speechSynthesis.speak(primer);
@@ -417,19 +498,43 @@
                     speakText(lastTranslatedText);
                 }
             });
+            document.getElementById('targetLanguage').addEventListener('change', (e) => {
+                const lang = e.target.value;
+                if (lang === 'en') {
+                    // Switching to English: disable speech
+                    if (speechEnabled) {
+                        speechEnabled = false;
+                        speakButton.textContent = 'Auto-Speak: OFF';
+                        speakButton.style.background = 'linear-gradient(45deg, #dc3545, #c82333)';
+                        speakButton.classList.remove('needs-tap');
+                        audioPlayer.muted = false;
+                        log('Auto-speak disabled (English selected)');
+                    }
+                } else if (!speechEnabled) {
+                    if (isIOS) {
+                        // iOS blocks speechSynthesis from select change events — pulse button for one tap
+                        speakButton.classList.add('needs-tap');
+                        speakButton.textContent = 'Tap to Enable Voice';
+                        log(`Language set to ${lang} — tap Auto-Speak button to enable voice`);
+                    } else {
+                        // Android/Chrome: change events are trusted gestures, auto-enable directly
+                        speechEnabled = true;
+                        speakButton.textContent = 'Auto-Speak: ON';
+                        speakButton.style.background = 'linear-gradient(45deg, #28a745, #218838)';
+                        if (translationEnabled) pauseAudioForTTS();
+                        const primer = new SpeechSynthesisUtterance('');
+                        window.speechSynthesis.speak(primer);
+                        log(`Auto-speak enabled for language: ${lang}`);
+                    }
+                }
+                // If speechEnabled is already true (already activated), nothing extra needed.
+            });
             volumeControl.addEventListener('input', () => {
                 audioPlayer.volume = volumeControl.value;
                 log(`Volume set to ${volumeControl.value}`);
             });
 
             audioPlayer.volume = volumeControl.value;
-
-            // Log available voices for debugging
-            window.speechSynthesis.onvoiceschanged = () => {
-                const voices = window.speechSynthesis.getVoices();
-                log('Available voices:');
-                voices.forEach(voice => log(`- ${voice.name} (${voice.lang})`));
-            };
         }
 
         document.addEventListener('DOMContentLoaded', initializeApp);

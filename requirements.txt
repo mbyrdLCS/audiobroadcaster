@@ -6,3 +6,5 @@ sounddevice==0.5.1
 SpeechRecognition==3.14.1
 typing_extensions==4.12.2
 vosk==0.3.45
+# Optional: only needed for TRANSCRIPTION_MODE='whisper'
+faster-whisper>=1.0.0

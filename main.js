@@ -1,11 +1,11 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow } = require('electron');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
-const axios = require('axios');
+let appIsQuitting = false;
 
 const expressApp = express();
 const server = http.createServer(expressApp);
@@ -21,26 +21,29 @@ expressApp.use(express.static(path.join(__dirname, 'public')));
 let broadcasterSocket = null;
 const listeners = new Map();
 let translationEnabled = true;
-let currentTargetLang = 'es';
-
-// Using MyMemory Translation API - free translation service (no API key needed)
-// Free tier: 1000 words/day anonymous, 10,000 words/day with email
-// Alternative: You can self-host LibreTranslate if you prefer
-const MYMEMORY_API = 'https://api.mymemory.translated.net/get';
 
 let pythonProcess;
 
 function startPythonProcess() {
     console.log('Starting Python process for transcription...');
-    // Try to use virtual environment python, fallback to system python3 or python
-    const pythonCmd = process.platform === 'win32'
-        ? path.join(__dirname, 'venv', 'Scripts', 'python.exe')
-        : path.join(__dirname, 'venv', 'bin', 'python');
+
+    let pythonCmd, scriptPath;
+    if (app.isPackaged) {
+        // Packaged app: transcribe.py is in extraResources, use system python3
+        scriptPath = path.join(process.resourcesPath, 'transcribe.py');
+        pythonCmd = 'python3';
+    } else {
+        // Development: use venv
+        pythonCmd = process.platform === 'win32'
+            ? path.join(__dirname, 'venv', 'Scripts', 'python.exe')
+            : path.join(__dirname, 'venv', 'bin', 'python');
+        scriptPath = path.join(__dirname, 'transcribe.py');
+    }
 
     pythonProcess = spawn(
         pythonCmd,
-        [path.join(__dirname, 'transcribe.py')],
-        { cwd: __dirname }
+        [scriptPath],
+        { cwd: path.dirname(scriptPath) }
     );
 
     pythonProcess.stdout.on('data', (data) => {
@@ -48,25 +51,8 @@ function startPythonProcess() {
         if (transcribedText && broadcasterSocket) {
             console.log(`Transcribed: ${transcribedText}`);
             broadcasterSocket.emit('transcribed-text', { text: transcribedText });
-            // Broadcast translated text (server-side) to listeners
             if (translationEnabled) {
-                handleTranslation(transcribedText, currentTargetLang)
-                    .then(translation => {
-                        console.log(`Translated: "${transcribedText}" -> "${translation}"`);
-                        const payload = { text: translation, lang: currentTargetLang };
-                        listeners.forEach(listener => listener.emit('translated-text', payload));
-                        if (broadcasterSocket) broadcasterSocket.emit('translated-text', payload);
-                    })
-                    .catch(error => {
-                        console.error(`Translation error: ${error.message}`);
-                        const payload = { text: `Translation failed: ${transcribedText}`, lang: currentTargetLang };
-                        listeners.forEach(listener => listener.emit('translated-text', payload));
-                        if (broadcasterSocket) broadcasterSocket.emit('translated-text', payload);
-                    });
-            } else {
-                const payload = { text: transcribedText, lang: currentTargetLang };
-                listeners.forEach(listener => listener.emit('translated-text', payload));
-                if (broadcasterSocket) broadcasterSocket.emit('translated-text', payload);
+                listeners.forEach(l => l.emit('transcribed-text', { text: transcribedText }));
             }
         } else {
             console.log(`Received stdout from Python, but no broadcasterSocket or empty text: ${transcribedText}`);
@@ -79,7 +65,7 @@ function startPythonProcess() {
 
     pythonProcess.on('close', (code) => {
         console.log(`Python process exited with code ${code}`);
-        if (code !== 0 && !app.isQuitting()) {
+        if (code !== 0 && !appIsQuitting) {
             console.log('Restarting Python process...');
             startPythonProcess();
         }
@@ -163,63 +149,17 @@ io.on('connection', (socket) => {
         listeners.forEach(listener => listener.emit('translation-state', state));
     });
 
-    socket.on('set-target-language', (lang) => {
-        if (typeof lang === 'string' && lang.length <= 8) {
-            currentTargetLang = lang;
-            console.log(`Target language set to: ${currentTargetLang}`);
-        }
-    });
-
-    socket.on('transcribed-text', (data) => {
-        // Only update the current language from the broadcaster; avoid double-translation
-        const targetLang = (data && typeof data.targetLang === 'string' && data.targetLang) ? data.targetLang : currentTargetLang;
-        currentTargetLang = targetLang;
-        console.log(`Updated target language from broadcaster payload: ${currentTargetLang}`);
-    });
-
     socket.on('disconnect', () => {
         console.log(`Client disconnected: ${socket.id}`);
         if (socket === broadcasterSocket) {
             broadcasterSocket = null;
-            if (pythonProcess) pythonProcess.stdin.write('STOP\n');
+            if (pythonProcess && pythonProcess.stdin.writable) {
+                pythonProcess.stdin.write('STOP\n');
+            }
         }
         listeners.delete(socket.id);
     });
 });
-
-async function handleTranslation(text, targetLang) {
-    try {
-        console.log(`Attempting to translate: "${text}" to ${targetLang}`);
-
-        // MyMemory API uses GET with langpair parameter (source|target)
-        const url = `${MYMEMORY_API}?q=${encodeURIComponent(text)}&langpair=en|${targetLang}`;
-
-        const response = await axios.get(url, {
-            timeout: 5000
-        });
-
-        console.log(`MyMemory API response:`, JSON.stringify(response.data));
-
-        // MyMemory returns: { responseData: { translatedText: "..." }, responseStatus: 200 }
-        const translation = response.data?.responseData?.translatedText;
-
-        if (!translation) {
-            console.error(`No translatedText in response. Full response: ${JSON.stringify(response.data)}`);
-            return text;
-        }
-
-        console.log(`Translation successful: "${translation}"`);
-        return translation;
-    } catch (error) {
-        console.error(`Translation error: ${error.message}`);
-        if (error.response) {
-            console.error(`Response status: ${error.response.status}`);
-            console.error(`Response data: ${JSON.stringify(error.response.data)}`);
-        }
-        // Return original text if translation fails
-        return text;
-    }
-}
 
 function getLocalIP() {
     const interfaces = os.networkInterfaces();
@@ -260,8 +200,7 @@ function createBroadcasterWindow(ip, port) {
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             contextIsolation: true,
-            nodeIntegration: false,
-            webSecurity: false
+            nodeIntegration: false
         }
     });
     win.loadURL(`http://localhost:${port}/broadcaster.html`);
@@ -273,7 +212,8 @@ app.whenReady().then(async () => {
     createBroadcasterWindow(ip, port);
 });
 
-app.on('quit', () => {
+app.on('will-quit', () => {
+    appIsQuitting = true;
     if (pythonProcess) pythonProcess.kill();
     server.close();
 });

@@ -7,6 +7,11 @@ const os = require('os');
 const { spawn } = require('child_process');
 let appIsQuitting = false;
 
+// Prevent EPIPE and other socket errors from showing a crash dialog
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught exception (handled):', err.message);
+});
+
 const expressApp = express();
 const server = http.createServer(expressApp);
 const io = new Server(server, { 
@@ -48,11 +53,13 @@ function startPythonProcess() {
 
     pythonProcess.stdout.on('data', (data) => {
         const transcribedText = data.toString().trim();
-        if (transcribedText && broadcasterSocket) {
+        if (transcribedText && broadcasterSocket && broadcasterSocket.connected) {
             console.log(`Transcribed: ${transcribedText}`);
             broadcasterSocket.emit('transcribed-text', { text: transcribedText });
             if (translationEnabled) {
-                listeners.forEach(l => l.emit('transcribed-text', { text: transcribedText }));
+                listeners.forEach((l, id) => {
+                    if (l.connected) l.emit('transcribed-text', { text: transcribedText });
+                });
             }
         } else {
             console.log(`Received stdout from Python, but no broadcasterSocket or empty text: ${transcribedText}`);

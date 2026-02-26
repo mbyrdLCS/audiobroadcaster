@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, dialog, shell, net } = require('electron');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -214,9 +214,37 @@ function createBroadcasterWindow(ip, port) {
     win.webContents.on('did-finish-load', () => win.webContents.send('server-info', { ip, port }));
 }
 
+async function checkForUpdates() {
+    try {
+        const response = await net.fetch(
+            'https://api.github.com/repos/mbyrdLCS/audiobroadcaster/releases/latest',
+            { headers: { 'User-Agent': 'AudioBroadcaster' } }
+        );
+        const data = await response.json();
+        const latestVersion = data.tag_name.replace(/^v/, '');
+        const currentVersion = app.getVersion();
+        if (latestVersion !== currentVersion) {
+            const result = await dialog.showMessageBox({
+                type: 'info',
+                title: 'Update Available',
+                message: `Audio Broadcaster ${data.tag_name} is available`,
+                detail: `You are running version ${currentVersion}. Click Download to open the releases page.`,
+                buttons: ['Download Update', 'Later'],
+                defaultId: 0
+            });
+            if (result.response === 0) {
+                shell.openExternal('https://github.com/mbyrdLCS/audiobroadcaster/releases/latest');
+            }
+        }
+    } catch (err) {
+        console.log('Update check failed:', err.message);
+    }
+}
+
 app.whenReady().then(async () => {
     const { ip, port } = await startServer();
     createBroadcasterWindow(ip, port);
+    checkForUpdates();
 });
 
 app.on('will-quit', () => {

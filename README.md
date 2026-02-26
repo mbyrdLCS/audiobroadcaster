@@ -29,7 +29,7 @@ Not sure which you have? Click the Apple menu → About This Mac. If it says "Ap
 The app requires Python 3 and two audio packages. Open **Terminal** (search for it in Spotlight) and run:
 
 ```bash
-pip3 install SpeechRecognition sounddevice
+pip3 install --user SpeechRecognition sounddevice
 ```
 
 If `pip3` is not found, install Python 3 first from [python.org/downloads](https://www.python.org/downloads/) then run the command above again.
@@ -151,7 +151,7 @@ npm install
 python3 -m venv venv
 source venv/bin/activate        # macOS/Linux
 # venv\Scripts\activate         # Windows
-pip install -r requirements.txt
+pip install --user -r requirements.txt
 ```
 
 ### Run in development
@@ -207,7 +207,7 @@ Edit `transcribe.py` and set `TRANSCRIPTION_MODE = 'whisper'`
 Make sure Python 3 is installed and packages are set up:
 ```bash
 python3 --version
-pip3 install SpeechRecognition sounddevice
+pip3 install --user SpeechRecognition sounddevice
 ```
 
 ### Microphone not working

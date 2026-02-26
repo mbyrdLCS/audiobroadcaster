@@ -53,12 +53,12 @@ function startPythonProcess() {
 
     pythonProcess.stdout.on('data', (data) => {
         const transcribedText = data.toString().trim();
-        if (transcribedText && broadcasterSocket && broadcasterSocket.connected) {
+        if (transcribedText && broadcasterSocket) {
             console.log(`Transcribed: ${transcribedText}`);
-            broadcasterSocket.emit('transcribed-text', { text: transcribedText });
+            try { broadcasterSocket.emit('transcribed-text', { text: transcribedText }); } catch (e) { console.error('Broadcaster emit error:', e.message); }
             if (translationEnabled) {
-                listeners.forEach((l, id) => {
-                    if (l.connected) l.emit('transcribed-text', { text: transcribedText });
+                listeners.forEach((l) => {
+                    try { l.emit('transcribed-text', { text: transcribedText }); } catch (e) {}
                 });
             }
         } else {

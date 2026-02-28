@@ -13,7 +13,7 @@ import json
 # Set to 'online'  for Google's free Web Speech API (requires internet)
 # Set to 'offline' for Vosk (no internet required, fully open source)
 # Set to 'whisper' for faster-whisper (offline, much more accurate, recommended)
-TRANSCRIPTION_MODE = 'online'  # Change to 'offline', 'whisper', etc.
+TRANSCRIPTION_MODE = 'whisper'  # Change to 'online', 'offline', or 'whisper'
 
 # For offline mode: Path to Vosk model directory
 # Download models from: https://alphacephei.com/vosk/models
@@ -99,8 +99,15 @@ if TRANSCRIPTION_MODE == 'offline':
 elif TRANSCRIPTION_MODE == 'whisper':
     try:
         from faster_whisper import WhisperModel
-        print(f"Loading Whisper model: {WHISPER_MODEL_SIZE} ...", file=sys.stderr)
+        # Check if model is already cached to show helpful status
+        _cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+        _model_cache = os.path.join(_cache_dir, f"models--Systran--faster-whisper-{WHISPER_MODEL_SIZE}")
+        if not os.path.isdir(_model_cache):
+            print(f"STATUS:Downloading Whisper model (first run only, ~145MB)...", flush=True)
+        else:
+            print(f"STATUS:Loading Whisper model...", flush=True)
         whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+        print(f"STATUS:Whisper model ready", flush=True)
         print(f"Whisper model loaded successfully - WHISPER MODE ACTIVE", file=sys.stderr)
     except ImportError:
         print("ERROR: faster-whisper not installed. Run: pip install faster-whisper", file=sys.stderr)

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell, net } = require('electron');
+const { app, BrowserWindow, dialog, shell, net, session } = require('electron');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -52,18 +52,32 @@ function startPythonProcess() {
     );
 
     pythonProcess.stdout.on('data', (data) => {
-        const transcribedText = data.toString().trim();
-        if (transcribedText && broadcasterSocket) {
-            console.log(`Transcribed: ${transcribedText}`);
-            try { broadcasterSocket.emit('transcribed-text', { text: transcribedText }); } catch (e) { console.error('Broadcaster emit error:', e.message); }
-            if (translationEnabled) {
-                listeners.forEach((l) => {
-                    try { l.emit('transcribed-text', { text: transcribedText }); } catch (e) {}
-                });
+        const lines = data.toString().split('\n');
+        lines.forEach((line) => {
+            line = line.trim();
+            if (!line) return;
+            // Filter out Intel MKL and other system warnings
+            if (line.startsWith('Intel') || line.startsWith('OMP:') || line.startsWith('WARNING:')) return;
+            // Handle status messages (model download/ready)
+            if (line.startsWith('STATUS:')) {
+                const status = line.slice(7);
+                console.log(`Python status: ${status}`);
+                if (broadcasterSocket) {
+                    try { broadcasterSocket.emit('python-status', status); } catch (e) {}
+                }
+                return;
             }
-        } else {
-            console.log(`Received stdout from Python, but no broadcasterSocket or empty text: ${transcribedText}`);
-        }
+            // Regular transcription
+            if (broadcasterSocket) {
+                console.log(`Transcribed: ${line}`);
+                try { broadcasterSocket.emit('transcribed-text', { text: line }); } catch (e) { console.error('Broadcaster emit error:', e.message); }
+                if (translationEnabled) {
+                    listeners.forEach((l) => {
+                        try { l.emit('transcribed-text', { text: line }); } catch (e) {}
+                    });
+                }
+            }
+        });
     });
 
     pythonProcess.stderr.on('data', (data) => {
@@ -242,6 +256,12 @@ async function checkForUpdates() {
 }
 
 app.whenReady().then(async () => {
+    // Allow microphone and speech recognition permissions for the broadcaster window
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+        callback(true);
+    });
+    session.defaultSession.setPermissionCheckHandler(() => true);
+
     const { ip, port } = await startServer();
     createBroadcasterWindow(ip, port);
     checkForUpdates();

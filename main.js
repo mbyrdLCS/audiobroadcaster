@@ -14,18 +14,26 @@ process.on('uncaughtException', (err) => {
 
 const expressApp = express();
 const server = http.createServer(expressApp);
-const io = new Server(server, { 
+const io = new Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] },
     transports: ['websocket'],
     pingTimeout: 60000,
-    pingInterval: 25000
+    pingInterval: 25000,
+    maxHttpBufferSize: 1e6  // 1 MB — audio chunks are ~8 KB each
 });
 
+expressApp.use((req, res, next) => {
+    if (req.path.endsWith('.html')) {
+        res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+    }
+    next();
+});
 expressApp.use(express.static(path.join(__dirname, 'public')));
 
 let broadcasterSocket = null;
 const listeners = new Map();
 let translationEnabled = true;
+let transcriptionActive = false;
 
 let pythonProcess;
 
@@ -116,28 +124,24 @@ io.on('connection', (socket) => {
         if (broadcasterSocket) broadcasterSocket.emit('new-listener', socket.id);
     });
 
-    socket.on('offer', (offer, listenerId) => {
-        const listenerSocket = listeners.get(listenerId);
-        if (listenerSocket) listenerSocket.emit('offer', offer);
-    });
-
-    socket.on('answer', (answer) => {
-        if (broadcasterSocket) broadcasterSocket.emit('answer', answer, socket.id);
-    });
-
-    socket.on('ice-candidate', (candidate, listenerId) => {
-        // If from broadcaster, forward to the specific listener
-        if (socket === broadcasterSocket) {
-            const listenerSocket = listenerId ? listeners.get(listenerId) : null;
-            if (listenerSocket) listenerSocket.emit('ice-candidate', candidate);
-        } else {
-            // From a listener, forward to broadcaster with the sender's id
-            if (broadcasterSocket) broadcasterSocket.emit('ice-candidate', candidate, socket.id);
+    socket.on('audio-chunk', (buffer) => {
+        if (socket !== broadcasterSocket) return;
+        listeners.forEach((l) => {
+            try { l.emit('audio-chunk', buffer); } catch (e) {}
+        });
+        // Pipe audio to Python for transcription (avoids Python opening the mic
+        // simultaneously with the browser, which crashes the Chromium renderer)
+        if (transcriptionActive && pythonProcess && pythonProcess.stdin.writable) {
+            try {
+                const b64 = Buffer.from(buffer).toString('base64');
+                pythonProcess.stdin.write(`AUDIO:${b64}\n`);
+            } catch (e) {}
         }
     });
 
     socket.on('start-transcription', () => {
         console.log('Received start-transcription event');
+        transcriptionActive = true;
         if (pythonProcess && pythonProcess.stdin.writable) {
             pythonProcess.stdin.write('START\n');
             console.log('Sent START command to Python');
@@ -157,6 +161,7 @@ io.on('connection', (socket) => {
 
     socket.on('stop-transcription', () => {
         console.log('Received stop-transcription event');
+        transcriptionActive = false;
         if (pythonProcess && pythonProcess.stdin.writable) {
             pythonProcess.stdin.write('STOP\n');
             console.log('Sent STOP command to Python');
@@ -174,11 +179,16 @@ io.on('connection', (socket) => {
         console.log(`Client disconnected: ${socket.id}`);
         if (socket === broadcasterSocket) {
             broadcasterSocket = null;
+            transcriptionActive = false;
             if (pythonProcess && pythonProcess.stdin.writable) {
                 pythonProcess.stdin.write('STOP\n');
             }
+        } else if (listeners.has(socket.id)) {
+            listeners.delete(socket.id);
+            if (broadcasterSocket) {
+                try { broadcasterSocket.emit('listener-left', socket.id); } catch (e) {}
+            }
         }
-        listeners.delete(socket.id);
     });
 });
 

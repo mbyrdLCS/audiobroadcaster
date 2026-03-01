@@ -45,15 +45,6 @@
             margin-bottom: 20px;
             color: #d0e1ff;
         }
-        audio {
-            width: 100%;
-            max-width: 300px;
-            margin: 15px auto;
-            display: block;
-            border-radius: 10px;
-            background: #fff;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        }
         select {
             background: #fff;
             border: none;
@@ -172,7 +163,6 @@
         <img src="/Logo_primary_RGB.png" alt="ChurchApps Logo" class="logo">
         <h1>Audio Listener</h1>
         <p>Tap Play to tune in</p>
-        <audio id="audioPlayer" controls controlslist="nodownload" preload="auto"></audio>
         <button id="playButton">Play</button>
         <button id="reloadButton">Reload</button>
         <button id="copyLogs">Copy Logs</button>
@@ -203,7 +193,6 @@
         const MYMEMORY_EMAIL = '';
 
         let socket;
-        const audioPlayer = document.getElementById('audioPlayer');
         const debug = document.getElementById('debug');
         const playButton = document.getElementById('playButton');
         const reloadButton = document.getElementById('reloadButton');
@@ -211,15 +200,20 @@
         const speakButton = document.getElementById('speakButton');
         const volumeControl = document.getElementById('volumeControl');
         const logTextarea = document.getElementById('logTextarea');
+        const selectAllButton = document.getElementById('selectAllButton');
         const translatedTextDiv = document.getElementById('translatedText');
-        let pc = null;
-        let mediaStream = null;
+        let audioCtx = null;
+        let gainNode = null;
+        let nextPlayTime = 0;
         let hasInteracted = false;
+        // Chunk accumulator — module-level so togglePlayPause can clear it on pause
+        let pendingChunks = [];
+        let pendingSamples = 0;
         let isInitialized = false;
         let lastTranslatedText = '';
         let lastTranslatedLang = 'en';
         let speechEnabled = false;
-        let translationEnabled = false; // Will be set by translation-state event from server
+        let translationEnabled = false;
 
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 
@@ -229,16 +223,46 @@
             cachedVoices = window.speechSynthesis.getVoices();
         };
 
-        // iOS must pause() to release the audio session for TTS to be heard.
-        // Android doesn't have that conflict — muting is enough and avoids stream buffering issues.
         function pauseAudioForTTS() {
-            if (isIOS) audioPlayer.pause();
-            else audioPlayer.muted = true;
+            if (gainNode) gainNode.gain.value = 0;
         }
         function resumeAudioAfterTTS() {
-            audioPlayer.muted = false;
-            if (isIOS) audioPlayer.play().catch(() => {});
+            if (gainNode) gainNode.gain.value = parseFloat(volumeControl.value);
         }
+
+        // Hidden audio element used to route Web Audio through the media session.
+        // This bypasses the iOS mute switch (the physical slider on iPhone/iPad),
+        // which silences Web Audio API but not HTML5 <audio>/<video> elements.
+        let mediaAudioEl = null;
+
+        function initializeAudioContext() {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            gainNode = audioCtx.createGain();
+            gainNode.gain.value = parseFloat(volumeControl.value);
+
+            // Route through MediaStreamDestination → <audio> element.
+            // This puts audio in the "media playback" category, which:
+            //   • Bypasses the iOS silent/mute switch
+            //   • Works on Android Chrome
+            //   • Falls back gracefully on desktop (just plays normally)
+            if (audioCtx.createMediaStreamDestination) {
+                const msDest = audioCtx.createMediaStreamDestination();
+                gainNode.connect(msDest);
+                mediaAudioEl = document.createElement('audio');
+                mediaAudioEl.setAttribute('playsinline', '');
+                mediaAudioEl.srcObject = msDest.stream;
+                // play() must be called synchronously here — we are still inside the
+                // user-gesture (click) context at this point (no await has happened yet).
+                mediaAudioEl.play().catch(e => log(`Audio element error: ${e.message}`));
+            } else {
+                // Fallback: connect directly to hardware destination
+                gainNode.connect(audioCtx.destination);
+            }
+
+            nextPlayTime = 0;
+            log(`Audio ready (sampleRate: ${audioCtx.sampleRate})`);
+        }
+
 
         async function translateText(text, lang) {
             if (!text || lang === 'en') return text;
@@ -265,72 +289,29 @@
             console.log(message);
         }
 
-        async function initializeWebRTC() {
-            if (pc) pc.close();
-            pc = new RTCPeerConnection({
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' },
-                    { urls: 'stun:stun3.l.google.com:19302' },
-                    { urls: 'stun:stun4.l.google.com:19302' },
-                    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-                    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-                    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
-                ]
-            });
-
-            pc.onicecandidate = (event) => {
-                if (event.candidate) {
-                    socket.emit('ice-candidate', event.candidate);
-                    log('ICE candidate sent');
-                }
-            };
-
-            pc.ontrack = (event) => {
-                log('Received remote track');
-                mediaStream = event.streams[0];
-                log(`Stream tracks: ${mediaStream.getAudioTracks().length}`);
-                audioPlayer.srcObject = mediaStream;
-                audioPlayer.volume = volumeControl.value;
-                // Don't play raw audio if Auto-Speak is active (listener wants TTS only)
-                if (hasInteracted && !(speechEnabled && translationEnabled)) {
-                    audioPlayer.muted = false;
-                    audioPlayer.play().then(() => log('Audio playing'))
-                        .catch(err => log(`Play error: ${err.message}`));
-                }
-            };
-
-            pc.onconnectionstatechange = () => {
-                log(`Connection state: ${pc.connectionState}`);
-                if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                    log('Connection lost, reconnecting...');
-                    initializeWebRTC();
-                    socket.emit('listener');
-                }
-            };
-        }
-
         async function togglePlayPause() {
             hasInteracted = true;
-            if (audioPlayer.paused) {
-                if (!mediaStream || mediaStream.getAudioTracks().length === 0) {
-                    log('No stream available, initializing...');
-                    initializeWebRTC();
-                    socket.emit('listener');
-                    return;
-                }
-                try {
-                    await audioPlayer.play();
-                    playButton.textContent = 'Pause';
-                    log('Playing');
-                } catch (err) {
-                    log(`Play error: ${err.message}`);
-                }
+            if (!audioCtx) {
+                initializeAudioContext();
+                await audioCtx.resume();
+                playButton.textContent = 'Pause';
+                log('Audio playing');
+                return;
+            }
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+                if (mediaAudioEl) mediaAudioEl.play().catch(() => {});
+                nextPlayTime = 0; // reset so next chunk schedules from now
+                playButton.textContent = 'Pause';
+                log('Audio playing');
             } else {
-                audioPlayer.pause();
+                await audioCtx.suspend();
+                if (mediaAudioEl) mediaAudioEl.pause();
+                // Clear pending chunk accumulator so stale audio doesn't play on resume
+                pendingChunks = [];
+                pendingSamples = 0;
                 playButton.textContent = 'Play';
-                log('Paused');
+                log('Audio paused');
             }
         }
 
@@ -395,34 +376,51 @@
             isInitialized = true;
 
             socket = io(window.location.origin, { transports: ['websocket'] });
-            initializeWebRTC();
 
             socket.on('connect', () => {
                 log('Connected to server');
                 socket.emit('listener');
             });
 
-            socket.on('offer', async (offer) => {
-                try {
-                    await pc.setRemoteDescription(offer);
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-                    socket.emit('answer', answer);
-                    log('Answer sent');
-                } catch (err) {
-                    log(`Error handling offer: ${err.message}`);
-                }
-            });
+            // Accumulate small 2.9ms chunks into ~46ms buffers before scheduling.
+            // Scheduling 344 tiny buffers/sec is fragile in some browsers;
+            // larger buffers scheduled ~21x/sec work reliably everywhere.
+            const CHUNKS_PER_BUFFER = 16; // 16 × 128 = 2048 samples ≈ 46ms at 44100 Hz
 
-            socket.on('ice-candidate', async (candidate) => {
-                try {
-                    if (pc.remoteDescription) {
-                        await pc.addIceCandidate(candidate);
-                        log('ICE candidate added');
-                    }
-                } catch (err) {
-                    log(`ICE candidate error: ${err.message}`);
-                }
+            socket.on('audio-chunk', (buffer) => {
+                // Discard if user hasn't pressed Play yet
+                if (!audioCtx || audioCtx.state !== 'running') return;
+
+                // Decode Int16 → Float32
+                // Handle both ArrayBuffer and Uint8Array (Socket.IO may deliver either)
+                const int16 = buffer instanceof ArrayBuffer
+                    ? new Int16Array(buffer)
+                    : new Int16Array(buffer.buffer, buffer.byteOffset, buffer.byteLength >> 1);
+                const float32 = new Float32Array(int16.length);
+                for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+                pendingChunks.push(float32);
+                pendingSamples += float32.length;
+
+                if (pendingChunks.length < CHUNKS_PER_BUFFER) return;
+
+                // Combine accumulated chunks into one buffer
+                const combined = new Float32Array(pendingSamples);
+                let offset = 0;
+                for (const c of pendingChunks) { combined.set(c, offset); offset += c.length; }
+                pendingChunks = [];
+                pendingSamples = 0;
+
+                // Use the context's native sample rate for the buffer — avoids resampling issues
+                const audioBuffer = audioCtx.createBuffer(1, combined.length, audioCtx.sampleRate);
+                audioBuffer.copyToChannel(combined, 0);
+                const source = audioCtx.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(gainNode);
+                const now = audioCtx.currentTime;
+                if (nextPlayTime < now + 0.05) nextPlayTime = now + 0.05;
+                source.start(nextPlayTime);
+                nextPlayTime += audioBuffer.duration;
             });
 
             socket.on('transcribed-text', async ({ text }) => {
@@ -516,7 +514,7 @@
                         speakButton.textContent = 'Auto-Speak: OFF';
                         speakButton.style.background = 'linear-gradient(45deg, #dc3545, #c82333)';
                         speakButton.classList.remove('needs-tap');
-                        audioPlayer.muted = false;
+                        resumeAudioAfterTTS();
                         log('Auto-speak disabled (English selected)');
                     }
                 } else if (!speechEnabled) {
@@ -539,11 +537,9 @@
                 // If speechEnabled is already true (already activated), nothing extra needed.
             });
             volumeControl.addEventListener('input', () => {
-                audioPlayer.volume = volumeControl.value;
+                if (gainNode) gainNode.gain.value = parseFloat(volumeControl.value);
                 log(`Volume set to ${volumeControl.value}`);
             });
-
-            audioPlayer.volume = volumeControl.value;
         }
 
         document.addEventListener('DOMContentLoaded', initializeApp);

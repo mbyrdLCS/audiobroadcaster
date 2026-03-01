@@ -190,13 +190,12 @@
     <script>
         let socket;
         const debug = document.getElementById('debug');
-        const peerConnections = new Map();
         let audioContext = null;
         let audioElement = null;
         let sourceNode = null;
-        let streamDestination = null;
+        let workletNode = null;
         let translationEnabled = true;
-        const pendingListeners = new Set();
+        let listenerCount = 0;
 
         function log(msg) {
             console.log(msg);
@@ -208,7 +207,7 @@
         }
 
         function updateListenerCount() {
-            document.getElementById('listenerCount').textContent = `Listeners: ${peerConnections.size}`;
+            document.getElementById('listenerCount').textContent = `Listeners: ${listenerCount}`;
         }
 
         window.api.onServerInfo((info) => {
@@ -250,33 +249,14 @@
             });
             socket.on('connect_error', (err) => log(`Socket connect error: ${err.message}`));
             socket.on('new-listener', (listenerId) => {
-                if (!peerConnections.has(listenerId)) {
-                    log(`New listener: ${listenerId}`);
-                    initializeWebRTC(listenerId);
-                    updateListenerCount();
-                }
+                listenerCount++;
+                updateListenerCount();
+                log(`New listener: ${listenerId}`);
             });
-            socket.on('answer', async (answer, listenerId) => {
-                const pc = peerConnections.get(listenerId);
-                if (pc) {
-                    try {
-                        await pc.setRemoteDescription(answer);
-                        log(`Remote description set for ${listenerId}`);
-                    } catch (err) {
-                        log(`Error setting remote description: ${err.message}`);
-                    }
-                }
-            });
-            socket.on('ice-candidate', async (candidate, listenerId) => {
-                const pc = peerConnections.get(listenerId);
-                if (pc) {
-                    try {
-                        await pc.addIceCandidate(candidate);
-                        log(`ICE candidate added for ${listenerId}`);
-                    } catch (err) {
-                        log(`Error adding ICE candidate: ${err.message}`);
-                    }
-                }
+            socket.on('listener-left', (listenerId) => {
+                listenerCount = Math.max(0, listenerCount - 1);
+                updateListenerCount();
+                log(`Listener left: ${listenerId}`);
             });
             socket.on('transcribed-text', (data) => {
                 log(`Transcribed: ${data.text}`);
@@ -303,83 +283,11 @@
             });
         }
 
-        async function initializeWebRTC(listenerId) {
-            if (peerConnections.has(listenerId)) {
-                log(`Listener ${listenerId} already exists, skipping initialization`);
-                return;
-            }
-
-            const pc = new RTCPeerConnection({
-                iceServers: [
-                    { urls: 'stun:stun.l.google.com:19302' },
-                    { urls: 'stun:stun1.l.google.com:19302' },
-                    { urls: 'stun:stun2.l.google.com:19302' },
-                    { urls: 'stun:stun3.l.google.com:19302' },
-                    { urls: 'stun:stun4.l.google.com:19302' },
-                    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-                    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-                    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
-                ]
-            });
-            peerConnections.set(listenerId, pc);
-
-            pc.onicecandidate = (e) => {
-                if (e.candidate) socket.emit('ice-candidate', e.candidate, listenerId);
-            };
-            pc.onconnectionstatechange = () => {
-                log(`Connection state for ${listenerId}: ${pc.connectionState}`);
-                if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-                    peerConnections.delete(listenerId);
-                    pc.close();
-                    updateListenerCount();
-                }
-            };
-            // Handles both initial offer and renegotiation when tracks are added later
-            pc.onnegotiationneeded = async () => {
-                if (pc.signalingState !== 'stable') return;
-                try {
-                    const offer = await pc.createOffer();
-                    await pc.setLocalDescription(offer);
-                    socket.emit('offer', offer, listenerId);
-                    log(`Offer sent to ${listenerId}`);
-                } catch (err) {
-                    log(`Negotiation error: ${err.message}`);
-                }
-            };
-
-            if (streamDestination) {
-                addTracksToPeerConnection(pc, listenerId);
-                // onnegotiationneeded fires automatically with tracks
-            } else {
-                pendingListeners.add(listenerId);
-                log(`No stream yet, listener ${listenerId} added to pending`);
-                // Send initial offer so listener sets up its end
-                const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
-                await pc.setLocalDescription(offer);
-                socket.emit('offer', offer, listenerId);
-                log(`Offer sent to ${listenerId}`);
-            }
-        }
-
-        function addTracksToPeerConnection(pc, listenerId) {
-            if (pc.signalingState === 'closed') return;
-            const stream = streamDestination.stream;
-            stream.getAudioTracks().forEach(track => {
-                if (!track.addedTo) track.addedTo = [];
-                if (!track.addedTo.includes(listenerId)) {
-                    log(`Adding track to ${listenerId}: ${track.id}`);
-                    pc.addTrack(track, stream);
-                    track.addedTo.push(listenerId);
-                }
-            });
-        }
-
         async function startAudioStream(sourceType) {
             try {
                 stopStream();
                 audioContext = new AudioContext({ sampleRate: 44100 });
                 await audioContext.resume();
-                streamDestination = audioContext.createMediaStreamDestination();
                 log('Audio context resumed');
 
                 if (sourceType === 'microphone') {
@@ -388,7 +296,6 @@
                         const micStream = await navigator.mediaDevices.getUserMedia({
                             audio: {
                                 deviceId: deviceId ? { exact: deviceId } : undefined,
-                                sampleRate: 16000,
                                 channelCount: 1
                             }
                         });
@@ -411,29 +318,43 @@
                     const blob = await response.blob();
                     audioElement = new Audio(URL.createObjectURL(blob));
                     audioElement.loop = true;
-
-                    await new Promise(resolve => {
-                        audioElement.oncanplaythrough = resolve;
-                        audioElement.onerror = () => { throw new Error('MP3 playback error'); };
-                    });
-                    await audioElement.play();
+                    // Wait for enough data; if readyState already sufficient, resolve immediately.
+                    // Use addEventListener (not oncanplaythrough property) to avoid missing the
+                    // event if it fires synchronously before the handler is set.
+                    if (audioElement.readyState < 3) {
+                        await new Promise((resolve, reject) => {
+                            audioElement.addEventListener('canplay', resolve, { once: true });
+                            audioElement.addEventListener('error', () => reject(new Error('MP3 load error')), { once: true });
+                        });
+                    }
+                    // Connect to Web Audio BEFORE play() so audio routes directly into the graph
                     sourceNode = audioContext.createMediaElementSource(audioElement);
+                    await audioElement.play();
+                    if (translationEnabled && socket && socket.connected) {
+                        socket.emit('start-transcription');
+                        log('✓ Transcription started - MP3 source');
+                    }
                     log('MP3 playback started');
                 }
 
-                sourceNode.connect(streamDestination);
-                log(`Stream initialized with ${streamDestination.stream.getAudioTracks().length} tracks`);
-
-                peerConnections.forEach((pc, listenerId) => {
-                    if (pc.signalingState !== 'closed') {
-                        addTracksToPeerConnection(pc, listenerId);
+                // Route audio through AudioWorklet → encode as Int16 → relay via socket.
+                // AudioWorklet replaces the deprecated ScriptProcessorNode and avoids
+                // a Chromium crash (SIGSEGV) that occurs when calling socket.emit()
+                // directly inside a ScriptProcessorNode.onaudioprocess callback.
+                await audioContext.audioWorklet.addModule('/audio-processor.js');
+                workletNode = new AudioWorkletNode(audioContext, 'audio-processor');
+                workletNode.port.onmessage = (event) => {
+                    if (socket && socket.connected) {
+                        socket.emit('audio-chunk', event.data);
                     }
-                });
-                pendingListeners.forEach(listenerId => {
-                    const pc = peerConnections.get(listenerId);
-                    if (pc) addTracksToPeerConnection(pc, listenerId);
-                });
-                pendingListeners.clear();
+                };
+                // Silent gain prevents mic feedback through speakers
+                const silentGain = audioContext.createGain();
+                silentGain.gain.value = 0;
+                silentGain.connect(audioContext.destination);
+                sourceNode.connect(workletNode);
+                workletNode.connect(silentGain);
+                log('Audio relay started — streaming via server');
             } catch (err) {
                 log(`Audio stream error: ${err.message}`);
                 stopStream();
@@ -441,15 +362,12 @@
         }
 
         function stopStream() {
+            if (workletNode) { workletNode.disconnect(); workletNode.port.onmessage = null; workletNode = null; }
             if (sourceNode) sourceNode.disconnect();
-            if (streamDestination) streamDestination.stream.getTracks().forEach(track => track.stop());
-            if (audioElement) {
-                audioElement.pause();
-                audioElement.currentTime = 0;
-            }
+            if (audioElement) { audioElement.pause(); audioElement.currentTime = 0; }
             if (audioContext) audioContext.close();
+            workletNode = null;
             sourceNode = null;
-            streamDestination = null;
             audioElement = null;
             audioContext = null;
             if (socket && socket.connected) socket.emit('stop-transcription');
@@ -471,9 +389,7 @@
 
         document.getElementById('stop').addEventListener('click', () => {
             stopStream();
-            peerConnections.forEach(pc => pc.close());
-            peerConnections.clear();
-            pendingListeners.clear();
+            listenerCount = 0;
             updateListenerCount();
             document.getElementById('start').disabled = false;
             document.getElementById('stop').disabled = true;
@@ -515,7 +431,7 @@
             log(`Translation ${translationEnabled ? 'enabled' : 'disabled'}`);
             // Start/stop transcription based on translation state (saves CPU when off)
             if (socket && socket.connected) {
-                if (translationEnabled && streamDestination) {
+                if (translationEnabled && workletNode) {
                     socket.emit('start-transcription');
                     log('Transcription started');
                 } else {

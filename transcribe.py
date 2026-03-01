@@ -1,6 +1,8 @@
 import sys
 import time
 import threading
+import queue
+import base64
 import sounddevice as sd
 import speech_recognition as sr
 import numpy as np
@@ -120,24 +122,52 @@ print(f"Transcription mode: {TRANSCRIPTION_MODE.upper()}", file=sys.stderr)
 listening = False
 stop_event = threading.Event()
 
+# Queue used to pass audio chunks from stdin to the whisper transcription loop.
+# In whisper mode, Python never opens the microphone directly — the broadcaster
+# sends raw PCM via the Node.js server over stdin to avoid a CoreAudio conflict
+# that would crash Chromium's renderer when two processes open the same mic.
+audio_queue = queue.Queue()
+
+# Sample rate used by the broadcaster's AudioContext (hardcoded to match
+# broadcaster.html: new AudioContext({ sampleRate: 44100 }))
+BROADCASTER_RATE = 44100
+
 def read_commands():
+    """
+    Read commands AND audio chunks from stdin.
+    Protocol (line-based):
+      START       -> begin transcription
+      STOP        -> end transcription
+      AUDIO:<b64> -> base64-encoded Int16 PCM at BROADCASTER_RATE Hz
+    """
     global listening
     print("Waiting for commands... (send 'START' to begin, 'STOP' to end)", file=sys.stderr)
     while not stop_event.is_set():
         try:
-            line = sys.stdin.readline().strip()
-            print(f"Received command: {line}", file=sys.stderr)
+            line = sys.stdin.readline()
+            if not line:
+                break
+            line = line.strip()
             if line == "START":
                 listening = True
                 print("Starting transcription...", file=sys.stderr)
             elif line == "STOP":
                 listening = False
                 print("Stopping transcription...", file=sys.stderr)
+                # Drain the queue so stale audio isn't processed after restart
+                while not audio_queue.empty():
+                    try:
+                        audio_queue.get_nowait()
+                    except queue.Empty:
+                        break
+            elif line.startswith("AUDIO:") and TRANSCRIPTION_MODE == 'whisper' and listening:
+                raw = base64.b64decode(line[6:])
+                chunk = np.frombuffer(raw, dtype=np.int16).copy()
+                audio_queue.put(chunk)
         except Exception as e:
             print(f"Command read error: {e}", file=sys.stderr)
-        time.sleep(0.1)
 
-# Start command thread
+# Start command/audio reader thread
 command_thread = threading.Thread(target=read_commands, daemon=True)
 command_thread.start()
 
@@ -181,27 +211,39 @@ try:
                             print(f"Unexpected error: {e}", file=sys.stderr)
 
             elif TRANSCRIPTION_MODE == 'whisper':
-                # WHISPER MODE: Using faster-whisper (offline, highly accurate)
-                print("Starting offline transcription with Whisper...", file=sys.stderr)
+                # WHISPER MODE: Receive audio from the broadcaster via stdin.
+                # Python never opens the microphone — this avoids a CoreAudio
+                # notification that crashes the Chromium renderer when two processes
+                # open the same device simultaneously.
+                print("Waiting for audio from broadcaster...", file=sys.stderr)
                 audio_buffer = []
-                with sd.InputStream(samplerate=16000, channels=1, dtype='int16', device=device_index) as stream:
-                    print("Whisper stream opened, listening...", file=sys.stderr)
-                    while listening and not stop_event.is_set():
-                        try:
-                            chunk, _ = stream.read(8000)  # 0.5s chunks
-                            audio_buffer.append(chunk.flatten())
-                            if sum(len(c) for c in audio_buffer) >= 16000 * 5:  # 5 sec
-                                audio_np = np.concatenate(audio_buffer).astype(np.float32) / 32768.0
-                                audio_buffer = []
-                                segments, _ = whisper_model.transcribe(audio_np, beam_size=5, language='en')
-                                transcript = ' '.join(s.text.strip() for s in segments).strip()
-                                if transcript:
-                                    print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)
-                                    filtered_transcript = remove_repetitive_words(transcript)
-                                    if filtered_transcript:
-                                        print(filtered_transcript, flush=True)
-                        except Exception as e:
-                            print(f"Whisper error: {e}", file=sys.stderr)
+                accumulate_target = BROADCASTER_RATE * 5  # 5 seconds of audio
+
+                while listening and not stop_event.is_set():
+                    try:
+                        chunk = audio_queue.get(timeout=0.5)
+                        audio_buffer.append(chunk)
+                        if sum(len(c) for c in audio_buffer) >= accumulate_target:
+                            audio_np = np.concatenate(audio_buffer).astype(np.float32) / 32768.0
+                            audio_buffer = []
+                            # Resample from BROADCASTER_RATE (44100Hz) to 16000Hz for Whisper
+                            target_len = int(len(audio_np) * 16000 / BROADCASTER_RATE)
+                            audio_np = np.interp(
+                                np.linspace(0, len(audio_np) - 1, target_len),
+                                np.arange(len(audio_np)),
+                                audio_np
+                            ).astype(np.float32)
+                            segments, _ = whisper_model.transcribe(audio_np, beam_size=5, language='en')
+                            transcript = ' '.join(s.text.strip() for s in segments).strip()
+                            if transcript:
+                                print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)
+                                filtered_transcript = remove_repetitive_words(transcript)
+                                if filtered_transcript:
+                                    print(filtered_transcript, flush=True)
+                    except queue.Empty:
+                        pass  # No audio yet, keep waiting
+                    except Exception as e:
+                        print(f"Whisper error: {e}", file=sys.stderr)
 
             else:
                 # OFFLINE MODE: Using Vosk

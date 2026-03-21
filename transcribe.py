@@ -233,7 +233,14 @@ try:
                                 np.arange(len(audio_np)),
                                 audio_np
                             ).astype(np.float32)
-                            segments, _ = whisper_model.transcribe(audio_np, beam_size=5, language='en')
+                            segments, _ = whisper_model.transcribe(
+                                audio_np,
+                                beam_size=5,
+                                language='en',
+                                vad_filter=True,
+                                vad_parameters=dict(min_silence_duration_ms=300),
+                                no_speech_threshold=0.6
+                            )
                             transcript = ' '.join(s.text.strip() for s in segments).strip()
                             if transcript:
                                 print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)

@@ -1,6 +1,6 @@
 {
   "name": "audio-broadcaster",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "description": "An Electron app for broadcasting audio",
   "author": "MJB",
   "main": "main.js",

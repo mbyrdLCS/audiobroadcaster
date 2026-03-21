@@ -8,24 +8,27 @@ import styles from './index.module.css';
 function HomepageHeader() {
   const {siteConfig} = useDocusaurusContext();
   return (
-    <header className={clsx('hero hero--primary', styles.heroBanner)}>
-      <div className="container">
-        <Heading as="h1" className="hero__title">
-          {siteConfig.title}
-        </Heading>
-        <p className="hero__subtitle">{siteConfig.tagline}</p>
-        <div className={styles.buttons}>
-          <Link
-            className="button button--secondary button--lg"
-            to="/docs/setup/intro"
-            style={{marginRight: '1rem'}}>
-            Setup Guide
-          </Link>
-          <Link
-            className="button button--secondary button--lg"
-            to="/docs/listener/intro">
-            Listener Guide
-          </Link>
+    <header className={styles.heroBanner}>
+      <div className={styles.heroImage}>
+        <img src="/audiobroadcaster/img/hero.png" alt="Audio Broadcaster" />
+        <div className={styles.heroOverlay}>
+          <Heading as="h1" className={styles.heroTitle}>
+            {siteConfig.title}
+          </Heading>
+          <p className={styles.heroSubtitle}>{siteConfig.tagline}</p>
+          <div className={styles.buttons}>
+            <Link
+              className="button button--primary button--lg"
+              to="/docs/setup/intro"
+              style={{marginRight: '1rem'}}>
+              Setup Guide
+            </Link>
+            <Link
+              className="button button--secondary button--lg"
+              to="/docs/listener/intro">
+              Listener Guide
+            </Link>
+          </div>
         </div>
       </div>
     </header>

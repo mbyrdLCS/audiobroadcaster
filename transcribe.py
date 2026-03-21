@@ -112,9 +112,9 @@ elif TRANSCRIPTION_MODE == 'whisper':
         print(f"STATUS:Whisper model ready", flush=True)
         print(f"Whisper model loaded successfully - WHISPER MODE ACTIVE", file=sys.stderr)
     except ImportError:
-        print("ERROR: faster-whisper not installed. Run: pip install faster-whisper", file=sys.stderr)
-        print("Falling back to online mode...", file=sys.stderr)
-        TRANSCRIPTION_MODE = 'online'
+        print("STATUS:⚠️ Translation requires faster-whisper. Open Terminal and run: pip3 install faster-whisper --break-system-packages — then restart the app.", flush=True)
+        print("ERROR: faster-whisper not installed.", file=sys.stderr)
+        TRANSCRIPTION_MODE = 'none'
 
 print(f"Transcription mode: {TRANSCRIPTION_MODE.upper()}", file=sys.stderr)
 
@@ -244,6 +244,10 @@ try:
                         pass  # No audio yet, keep waiting
                     except Exception as e:
                         print(f"Whisper error: {e}", file=sys.stderr)
+
+            elif TRANSCRIPTION_MODE == 'none':
+                # Missing dependency — message already sent to UI, just idle
+                time.sleep(1)
 
             else:
                 # OFFLINE MODE: Using Vosk

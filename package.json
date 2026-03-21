@@ -1,6 +1,6 @@
 {
   "name": "audio-broadcaster",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "An Electron app for broadcasting audio",
   "author": "MJB",
   "main": "main.js",
@@ -14,11 +14,13 @@
   },
   "devDependencies": {
     "electron": "^28.2.3",
-    "electron-builder": "^24.9.1"
+    "electron-builder": "^24.9.1",
+    "@electron/notarize": "^2.3.0"
   },
   "build": {
     "appId": "com.mjb.audiobroadcaster",
     "productName": "Audio Broadcaster",
+    "afterSign": "scripts/notarize.js",
     "mac": {
       "target": [
         {
@@ -27,8 +29,11 @@
         }
       ],
       "icon": "public/icon.icns",
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
+      "entitlements": "entitlements.plist",
+      "entitlementsInherit": "entitlements.plist",
       "gatekeeperAssess": false,
+      "identity": "BAIPHONES LLC (QLSQ27WR56)",
       "minimumSystemVersion": "10.13"
     },
     "files": [

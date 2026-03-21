@@ -17,10 +17,10 @@ A real-time audio broadcasting application with live speech-to-text transcriptio
 
 | Your Mac | File to download |
 |----------|-----------------|
-| Apple Silicon (M1, M2, M3, M4) | `Audio Broadcaster-x.x.x-arm64.dmg` |
+| Apple Silicon (M1, M2, M3) | `Audio Broadcaster-x.x.x-arm64.dmg` |
 | Intel Mac | `Audio Broadcaster-x.x.x.dmg` |
 
-Not sure which you have? Click the Apple menu → About This Mac. If it says "Apple M1" (or M2/M3/M4), download the arm64 version. Otherwise download the regular one.
+Not sure which you have? Click the Apple menu → About This Mac. If it says "Apple M1" (or M2/M3), download the arm64 version. Otherwise download the regular one.
 
 ---
 
@@ -47,7 +47,22 @@ Double-click the downloaded DMG file and drag **Audio Broadcaster** to your Appl
 
 ---
 
-### Step 4 — Grant microphone access
+### Step 4 — Bypass the macOS security warning
+
+> **Important:** Because this app is not sold through the Mac App Store, macOS will block it the first time you open it. This is normal. Follow these steps:
+
+1. **Do NOT double-click the app** — it will be blocked
+2. Right-click (or Control-click) the **Audio Broadcaster** app in your Applications folder
+3. Choose **Open** from the menu
+4. A dialog appears saying "macOS cannot verify the developer" — click **Open** anyway
+
+You only need to do this **once**. After that, the app opens normally.
+
+![Right-click Open](https://support.apple.com/library/content/dam/edam/applecare/images/en_US/macos/Big-Sur/macos-big-sur-right-click-open-app.jpg)
+
+---
+
+### Step 5 — Grant microphone access
 
 The first time the app runs, macOS will ask for microphone permission. Click **Allow**.
 
@@ -131,8 +146,8 @@ const MYMEMORY_EMAIL = 'you@example.com';
 ### Setup
 
 ```bash
-git clone https://github.com/mbyrdLCS/audiobroadcaster.git
-cd audiobroadcaster
+git clone https://github.com/yourusername/audio-broadcaster.git
+cd audio-broadcaster
 
 # Install Node dependencies
 npm install
@@ -204,6 +219,10 @@ pip3 install --user SpeechRecognition sounddevice
 
 - Go to System Preferences → Security & Privacy → Privacy → Microphone
 - Make sure Audio Broadcaster is checked
+
+### "Cannot be opened because the developer cannot be verified"
+
+Follow Step 4 above — right-click the app and choose Open.
 
 ### Translation not working
 

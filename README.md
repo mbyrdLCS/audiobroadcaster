@@ -51,7 +51,7 @@ Double-click the downloaded DMG file and drag **Audio Broadcaster** to your Appl
 
 The first time the app runs, macOS will ask for microphone permission. Click **Allow**.
 
-If you accidentally clicked Deny, go to System Preferences → Security & Privacy → Privacy → Microphone and enable Audio Broadcaster.
+If you accidentally clicked Deny, go to **System Settings → Privacy & Security → Microphone** (macOS Ventura and later) or **System Preferences → Security & Privacy → Privacy → Microphone** (older macOS) and enable Audio Broadcaster.
 
 ---
 
@@ -66,7 +66,7 @@ If you accidentally clicked Deny, go to System Preferences → Security & Privac
 
 ### Listeners (phones and tablets)
 
-1. Open the listener URL in any browser (Safari on iPhone, Chrome on Android)
+1. Open the **B1 app** and tap the **Listen Live** tab — or open the listener URL directly in Safari (iPhone) or Chrome (Android)
 2. Tap **Play** to start receiving audio
 3. Select your language from the dropdown (Spanish, French, Korean, etc.)
 4. On **iPhone/iPad**: tap the **"Tap to Enable Voice"** button that appears — this activates translated speech in your language
@@ -202,7 +202,7 @@ pip3 install --user SpeechRecognition sounddevice
 
 ### Microphone not working
 
-- Go to System Preferences → Security & Privacy → Privacy → Microphone
+- Go to **System Settings → Privacy & Security → Microphone** (macOS Ventura and later) or **System Preferences → Security & Privacy → Privacy → Microphone** (older macOS)
 - Make sure Audio Broadcaster is checked
 
 ### Translation not working
@@ -252,7 +252,7 @@ For commercial licensing: micheal@livechurchsolutions.org
 
 ## Support
 
-- **Issues**: [GitHub Issues](../../issues)
+- **Issues**: [GitHub Issues](https://github.com/mbyrdLCS/audiobroadcaster/issues)
 - **Email**: micheal@livechurchsolutions.org
 - **ChurchApps**: [churchapps.org](https://churchapps.org)
 

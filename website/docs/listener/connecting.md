@@ -11,7 +11,7 @@ Make sure your phone is connected to your church's Wi-Fi network before opening 
 
 ## Step 2 — Open B1 and Tap Listen Live
 
-1. Open the **B1** app on your phone
+1. Open the **B1 app** on your phone (this is your church's app from ChurchApps)
 2. Look for the **Listen Live** tab (your church may have named it something slightly different)
 3. Tap it
 

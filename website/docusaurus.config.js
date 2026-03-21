@@ -89,7 +89,7 @@ const config = {
             ],
           },
         ],
-        copyright: `Copyright © ${new Date().getFullYear()} BAIPHONES LLC. Made with love for churches.`,
+        copyright: `Copyright © ${new Date().getFullYear()} ChurchApps. Made with love for churches.`,
       },
       prism: {
         theme: prismThemes.github,

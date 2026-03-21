@@ -36,6 +36,7 @@ let translationEnabled = true;
 let transcriptionActive = false;
 
 let pythonProcess;
+let pendingStatusMessage = null;
 
 function startPythonProcess() {
     console.log('Starting Python process for transcription...');
@@ -72,6 +73,8 @@ function startPythonProcess() {
                 console.log(`Python status: ${status}`);
                 if (broadcasterSocket) {
                     try { broadcasterSocket.emit('python-status', status); } catch (e) {}
+                } else {
+                    pendingStatusMessage = status;
                 }
                 return;
             }
@@ -114,6 +117,10 @@ io.on('connection', (socket) => {
         broadcasterSocket = socket;
         console.log(`Broadcaster registered: ${socket.id}`);
         listeners.forEach((_, listenerId) => socket.emit('new-listener', listenerId));
+        if (pendingStatusMessage) {
+            try { broadcasterSocket.emit('python-status', pendingStatusMessage); } catch (e) {}
+            pendingStatusMessage = null;
+        }
     });
 
     socket.on('listener', () => {

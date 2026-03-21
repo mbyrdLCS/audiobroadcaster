@@ -44,22 +44,46 @@ function sendStatus(msg) {
     }
 }
 
+function downloadModelAndStart() {
+    // Check if model is already cached
+    const os = require('os');
+    const fs = require('fs');
+    const modelCache = require('path').join(os.homedir(), '.cache', 'huggingface', 'hub', 'models--Systran--faster-whisper-base.en');
+    if (fs.existsSync(modelCache)) {
+        startPythonProcess();
+        return;
+    }
+    // Model not downloaded yet — download it now before starting
+    sendStatus('⏳ Downloading translation model (one-time, ~145MB)...');
+    const download = spawn('python3', ['-c', 'from faster_whisper import WhisperModel; WhisperModel("base.en", device="cpu", compute_type="int8"); print("done")']);
+    download.on('close', (code) => {
+        if (code === 0) {
+            sendStatus('✓ Translation ready');
+            startPythonProcess();
+        } else {
+            sendStatus('❌ Could not download translation model. Check your internet connection and restart the app.');
+        }
+    });
+    download.on('error', () => {
+        sendStatus('❌ Could not download translation model. Check your internet connection and restart the app.');
+    });
+}
+
 function ensureDependenciesAndStart() {
     // Check if faster-whisper is already installed
     const check = spawn('python3', ['-c', 'import faster_whisper']);
     check.on('close', (code) => {
         if (code === 0) {
-            // Already installed — start normally
-            startPythonProcess();
+            // Package installed — check model is downloaded too
+            downloadModelAndStart();
         } else {
-            // Not installed — install it automatically
-            sendStatus('⏳ Setting up translation for the first time, please wait (this takes about a minute)...');
+            // Not installed — install package first, then download model
+            sendStatus('⏳ Setting up translation for the first time, please wait...');
             const install = spawn('pip3', ['install', 'faster-whisper', '--break-system-packages']);
             install.stderr.on('data', (data) => console.log('pip install:', data.toString()));
             install.on('close', (installCode) => {
                 if (installCode === 0) {
-                    sendStatus('✓ Translation ready');
-                    startPythonProcess();
+                    downloadModelAndStart();
                 } else {
                     sendStatus('❌ Could not set up translation automatically. Please contact support.');
                 }

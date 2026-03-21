@@ -281,8 +281,10 @@ async function startServer() {
     });
 }
 
+let mainWindow = null;
+
 function createBroadcasterWindow(ip, port) {
-    const win = new BrowserWindow({
+    mainWindow = new BrowserWindow({
         width: 800,
         height: 600,
         webPreferences: {
@@ -291,8 +293,11 @@ function createBroadcasterWindow(ip, port) {
             nodeIntegration: false
         }
     });
-    win.loadURL(`http://localhost:${port}/broadcaster.html`);
-    win.webContents.on('did-finish-load', () => win.webContents.send('server-info', { ip, port }));
+    mainWindow.loadURL(`http://localhost:${port}/broadcaster.html`);
+    mainWindow.webContents.on('did-finish-load', () => {
+        mainWindow.webContents.send('server-info', { ip, port });
+        checkForUpdates();
+    });
 }
 
 async function checkForUpdates() {
@@ -305,7 +310,7 @@ async function checkForUpdates() {
         const latestVersion = data.tag_name.replace(/^v/, '');
         const currentVersion = app.getVersion();
         if (latestVersion !== currentVersion) {
-            const result = await dialog.showMessageBox({
+            const result = await dialog.showMessageBox(mainWindow, {
                 type: 'info',
                 title: 'Update Available',
                 message: `Audio Broadcaster ${data.tag_name} is available`,
@@ -331,7 +336,6 @@ app.whenReady().then(async () => {
 
     const { ip, port } = await startServer();
     createBroadcasterWindow(ip, port);
-    checkForUpdates();
 });
 
 app.on('will-quit', () => {

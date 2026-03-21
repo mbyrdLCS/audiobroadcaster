@@ -36,7 +36,43 @@ let translationEnabled = true;
 let transcriptionActive = false;
 
 let pythonProcess;
-let pendingStatusMessage = null;
+let pythonReady = false;
+
+function sendStatus(msg) {
+    if (broadcasterSocket) {
+        try { broadcasterSocket.emit('python-status', msg); } catch (e) {}
+    }
+}
+
+function ensureDependenciesAndStart() {
+    // Check if faster-whisper is already installed
+    const check = spawn('python3', ['-c', 'import faster_whisper']);
+    check.on('close', (code) => {
+        if (code === 0) {
+            // Already installed — start normally
+            startPythonProcess();
+        } else {
+            // Not installed — install it automatically
+            sendStatus('⏳ Setting up translation for the first time, please wait (this takes about a minute)...');
+            const install = spawn('pip3', ['install', 'faster-whisper', '--break-system-packages']);
+            install.stderr.on('data', (data) => console.log('pip install:', data.toString()));
+            install.on('close', (installCode) => {
+                if (installCode === 0) {
+                    sendStatus('✓ Translation ready');
+                    startPythonProcess();
+                } else {
+                    sendStatus('❌ Could not set up translation automatically. Please contact support.');
+                }
+            });
+            install.on('error', () => {
+                sendStatus('❌ Could not set up translation automatically. Please contact support.');
+            });
+        }
+    });
+    check.on('error', () => {
+        sendStatus('❌ Python not found. Please install Python 3 from python.org then restart the app.');
+    });
+}
 
 function startPythonProcess() {
     console.log('Starting Python process for transcription...');
@@ -71,11 +107,7 @@ function startPythonProcess() {
             if (line.startsWith('STATUS:')) {
                 const status = line.slice(7);
                 console.log(`Python status: ${status}`);
-                if (broadcasterSocket) {
-                    try { broadcasterSocket.emit('python-status', status); } catch (e) {}
-                } else {
-                    pendingStatusMessage = status;
-                }
+                sendStatus(status);
                 return;
             }
             // Regular transcription
@@ -108,8 +140,6 @@ function startPythonProcess() {
     });
 }
 
-startPythonProcess();
-
 io.on('connection', (socket) => {
     console.log(`Client connected: ${socket.id}`);
 
@@ -117,9 +147,9 @@ io.on('connection', (socket) => {
         broadcasterSocket = socket;
         console.log(`Broadcaster registered: ${socket.id}`);
         listeners.forEach((_, listenerId) => socket.emit('new-listener', listenerId));
-        if (pendingStatusMessage) {
-            try { broadcasterSocket.emit('python-status', pendingStatusMessage); } catch (e) {}
-            pendingStatusMessage = null;
+        if (!pythonReady) {
+            pythonReady = true;
+            ensureDependenciesAndStart();
         }
     });
 

@@ -45,27 +45,24 @@ function sendStatus(msg) {
 }
 
 function downloadModelAndStart() {
-    // Check if model is already cached
-    const os = require('os');
-    const fs = require('fs');
-    const modelCache = require('path').join(os.homedir(), '.cache', 'huggingface', 'hub', 'models--Systran--faster-whisper-base.en');
-    if (fs.existsSync(modelCache)) {
-        startPythonProcess();
-        return;
-    }
-    // Model not downloaded yet — download it now before starting
-    sendStatus('⏳ Downloading translation model (one-time, ~145MB)...');
-    const download = spawn('python3', ['-c', 'from faster_whisper import WhisperModel; WhisperModel("base.en", device="cpu", compute_type="int8"); print("done")']);
-    download.on('close', (code) => {
-        if (code === 0) {
+    sendStatus('⏳ Loading translation model, please wait...');
+    // Always verify the model loads correctly before starting Python.
+    // If the model is already cached this takes ~5 seconds.
+    // If it needs to download it takes ~1-2 minutes (145MB).
+    const verify = spawn('python3', ['-c', 'from faster_whisper import WhisperModel; WhisperModel("base.en", device="cpu", compute_type="int8"); print("ok")']);
+    let output = '';
+    verify.stdout.on('data', (d) => { output += d.toString(); });
+    verify.stderr.on('data', (d) => { console.log('model verify:', d.toString()); });
+    verify.on('close', (code) => {
+        if (code === 0 && output.includes('ok')) {
             sendStatus('✓ Translation ready');
             startPythonProcess();
         } else {
-            sendStatus('❌ Could not download translation model. Check your internet connection and restart the app.');
+            sendStatus('❌ Could not load translation model. Check your internet connection and restart the app.');
         }
     });
-    download.on('error', () => {
-        sendStatus('❌ Could not download translation model. Check your internet connection and restart the app.');
+    verify.on('error', () => {
+        sendStatus('❌ Could not load translation model. Check your internet connection and restart the app.');
     });
 }
 

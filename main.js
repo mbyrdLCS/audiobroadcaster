@@ -67,16 +67,15 @@ function downloadModelAndStart() {
 }
 
 function ensureDependenciesAndStart() {
-    // Check if faster-whisper is already installed
-    const check = spawn('python3', ['-c', 'import faster_whisper']);
+    // Check if all required packages are installed
+    const check = spawn('python3', ['-c', 'import faster_whisper, sounddevice, speech_recognition, numpy']);
     check.on('close', (code) => {
         if (code === 0) {
-            // Package installed — check model is downloaded too
             downloadModelAndStart();
         } else {
-            // Not installed — install package first, then download model
             sendStatus('⏳ Setting up translation for the first time, please wait...');
-            const install = spawn('pip3', ['install', 'faster-whisper', '--break-system-packages']);
+            const packages = ['faster-whisper', 'sounddevice', 'SpeechRecognition', 'numpy'];
+            const install = spawn('pip3', ['install', ...packages, '--break-system-packages']);
             install.stderr.on('data', (data) => console.log('pip install:', data.toString()));
             install.on('close', (installCode) => {
                 if (installCode === 0) {
@@ -151,8 +150,8 @@ function startPythonProcess() {
     pythonProcess.on('close', (code) => {
         console.log(`Python process exited with code ${code}`);
         if (code !== 0 && !appIsQuitting) {
-            console.log('Restarting Python process...');
-            startPythonProcess();
+            sendStatus(`❌ Translation crashed (code ${code}). Restarting...`);
+            setTimeout(() => startPythonProcess(), 2000);
         }
     });
 

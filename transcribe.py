@@ -171,6 +171,26 @@ def read_commands():
 command_thread = threading.Thread(target=read_commands, daemon=True)
 command_thread.start()
 
+# Profanity filter — blocks common curse words from ever appearing in output
+PROFANITY = {
+    'fuck', 'fucking', 'fucked', 'fucker', 'fucks',
+    'shit', 'shitting', 'shitty', 'bullshit',
+    'ass', 'asshole', 'asses',
+    'bitch', 'bitches', 'bitching',
+    'damn', 'damned', 'goddamn', 'goddamned',
+    'hell', 'bastard', 'bastards',
+    'crap', 'crappy',
+    'piss', 'pissed', 'pissing',
+    'dick', 'dicks', 'cock', 'cocks',
+    'cunt', 'cunts', 'whore', 'whores',
+    'nigger', 'niggers', 'faggot', 'faggots',
+    'retard', 'retarded',
+}
+
+def contains_profanity(text):
+    words = text.lower().split()
+    return any(w.strip('.,!?;:\'"') in PROFANITY for w in words)
+
 # Main transcription loop
 def remove_repetitive_words(transcript):
     words = transcript.split()
@@ -197,7 +217,7 @@ try:
                         try:
                             audio = recognizer.listen(source, timeout=5, phrase_time_limit=10)
                             transcript = recognizer.recognize_google(audio)
-                            if transcript:
+                            if transcript and not contains_profanity(transcript):
                                 print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)
                                 filtered_transcript = remove_repetitive_words(transcript)
                                 print(filtered_transcript, flush=True)
@@ -239,10 +259,10 @@ try:
                                 language='en',
                                 vad_filter=True,
                                 vad_parameters=dict(min_silence_duration_ms=300),
-                                no_speech_threshold=0.6
+                                no_speech_threshold=0.8
                             )
                             transcript = ' '.join(s.text.strip() for s in segments).strip()
-                            if transcript:
+                            if transcript and not contains_profanity(transcript):
                                 print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)
                                 filtered_transcript = remove_repetitive_words(transcript)
                                 if filtered_transcript:
@@ -270,10 +290,11 @@ try:
                                 result = json.loads(vosk_recognizer.Result())
                                 if result.get('text'):
                                     transcript = result['text']
-                                    print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)
-                                    filtered_transcript = remove_repetitive_words(transcript)
-                                    if filtered_transcript:
-                                        print(filtered_transcript, flush=True)
+                                    if not contains_profanity(transcript):
+                                        print(f"DEBUG: Transcript='{transcript}'", file=sys.stderr)
+                                        filtered_transcript = remove_repetitive_words(transcript)
+                                        if filtered_transcript:
+                                            print(filtered_transcript, flush=True)
                         except Exception as e:
                             print(f"Vosk error: {e}", file=sys.stderr)
         else:

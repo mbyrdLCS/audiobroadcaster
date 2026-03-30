@@ -236,26 +236,25 @@
         let mediaAudioEl = null;
 
         function initializeAudioContext() {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            // latencyHint:'playback' asks the browser to use larger internal buffers
+            // optimised for smooth continuous playback rather than low-latency interaction.
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'playback' });
             gainNode = audioCtx.createGain();
             gainNode.gain.value = parseFloat(volumeControl.value);
 
-            // Route through MediaStreamDestination → <audio> element.
-            // This puts audio in the "media playback" category, which:
-            //   • Bypasses the iOS silent/mute switch
-            //   • Works on Android Chrome
-            //   • Falls back gracefully on desktop (just plays normally)
-            if (audioCtx.createMediaStreamDestination) {
+            if (isIOS && audioCtx.createMediaStreamDestination) {
+                // iOS only: route through MediaStreamDestination → hidden <audio> element.
+                // This bypasses the iOS hardware mute/silent switch, which silences
+                // Web Audio API output but not HTML5 <audio> media playback.
+                // play() is called synchronously here — still inside the user-gesture context.
                 const msDest = audioCtx.createMediaStreamDestination();
                 gainNode.connect(msDest);
                 mediaAudioEl = document.createElement('audio');
                 mediaAudioEl.setAttribute('playsinline', '');
                 mediaAudioEl.srcObject = msDest.stream;
-                // play() must be called synchronously here — we are still inside the
-                // user-gesture (click) context at this point (no await has happened yet).
                 mediaAudioEl.play().catch(e => log(`Audio element error: ${e.message}`));
             } else {
-                // Fallback: connect directly to hardware destination
+                // Desktop (Mac/PC) and Android: connect directly to hardware output.
                 gainNode.connect(audioCtx.destination);
             }
 
@@ -382,10 +381,10 @@
                 socket.emit('listener');
             });
 
-            // Accumulate small 2.9ms chunks into ~46ms buffers before scheduling.
-            // Scheduling 344 tiny buffers/sec is fragile in some browsers;
-            // larger buffers scheduled ~21x/sec work reliably everywhere.
-            const CHUNKS_PER_BUFFER = 16; // 16 × 128 = 2048 samples ≈ 46ms at 44100 Hz
+            // Schedule each broadcaster chunk immediately as it arrives.
+            // Each chunk is 4096 samples (~85ms at 48 kHz) — scheduled ~12x/sec.
+            // Combined with an 800ms pre-roll, any delivery gap under 800ms is inaudible.
+            const CHUNKS_PER_BUFFER = 1;
 
             socket.on('audio-chunk', (buffer) => {
                 // Discard if user hasn't pressed Play yet
@@ -418,7 +417,11 @@
                 source.buffer = audioBuffer;
                 source.connect(gainNode);
                 const now = audioCtx.currentTime;
-                if (nextPlayTime < now + 0.05) nextPlayTime = now + 0.05;
+                // Only reset if we've fallen behind — never reset a healthy schedule.
+                // A "now + lookahead" threshold causes false resets when chunks
+                // arrive with normal jitter, creating audible gaps.
+                // 800ms startup buffer absorbs GC pauses and WiFi jitter spikes.
+                if (nextPlayTime < now) nextPlayTime = now + 0.8;
                 source.start(nextPlayTime);
                 nextPlayTime += audioBuffer.duration;
             });

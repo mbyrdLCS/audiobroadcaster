@@ -261,23 +261,33 @@ function getLocalIP() {
 
 async function startServer() {
     return new Promise((resolve, reject) => {
-        // Use dynamic port to avoid EADDRINUSE; if PORT is set, honor it
-        const preferredPort = process.env.PORT ? Number(process.env.PORT) : 0;
-        const onError = (err) => {
-            server.removeListener('listening', onListening);
-            reject(err);
+        // Use a fixed default port so the listener URL stays the same across restarts.
+        // Falls back to a random port only if the preferred port is already in use.
+        const preferredPort = process.env.PORT ? Number(process.env.PORT) : 3000;
+
+        const tryListen = (port) => {
+            const onError = (err) => {
+                server.removeListener('listening', onListening);
+                if (err.code === 'EADDRINUSE' && port !== 0) {
+                    console.log(`Port ${port} in use, falling back to random port`);
+                    tryListen(0);
+                } else {
+                    reject(err);
+                }
+            };
+            const onListening = () => {
+                server.removeListener('error', onError);
+                const addr = server.address();
+                const resolvedPort = typeof addr === 'string' ? port : addr.port;
+                const ip = getLocalIP();
+                console.log(`Server running at http://${ip}:${resolvedPort}`);
+                resolve({ ip, port: resolvedPort });
+            };
+            server.once('error', onError);
+            server.once('listening', onListening);
+            server.listen(port, '0.0.0.0');
         };
-        const onListening = () => {
-            server.removeListener('error', onError);
-            const addr = server.address();
-            const port = typeof addr === 'string' ? (process.env.PORT ? Number(process.env.PORT) : 0) : addr.port;
-            const ip = getLocalIP();
-            console.log(`Server running at http://${ip}:${port}`);
-            resolve({ ip, port });
-        };
-        server.once('error', onError);
-        server.once('listening', onListening);
-        server.listen(preferredPort, '0.0.0.0');
+        tryListen(preferredPort);
     });
 }
 

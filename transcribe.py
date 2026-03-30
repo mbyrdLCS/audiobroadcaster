@@ -3,8 +3,6 @@ import time
 import threading
 import queue
 import base64
-import sounddevice as sd
-import speech_recognition as sr
 import numpy as np
 import os
 import json
@@ -28,56 +26,60 @@ WHISPER_MODEL_SIZE = 'base.en'
 
 # ============================================================================
 
-# Configure audio input dynamically
-def get_device_info(device_index):
-    try:
-        devices = sd.query_devices()
-        if 0 <= device_index < len(devices):
-            device_info = devices[device_index]
-            print(f"Device {device_index} ({device_info['name']}): Max input channels = {device_info['max_input_channels']}", file=sys.stderr)
-            return device_info
-        else:
-            raise ValueError(f"Invalid device index: {device_index}")
-    except Exception as e:
-        print(f"Error querying device {device_index}: {e}", file=sys.stderr)
-        return None
-
-# Dynamically select the "MacBook Pro Microphone" or fallback to default input device
-def find_macbook_pro_mic():
-    devices = sd.query_devices()
-    for i, device in enumerate(devices):
-        if device['name'] == 'MacBook Pro Microphone' and device['max_input_channels'] > 0:
-            print(f"Found MacBook Pro Microphone at index {i}", file=sys.stderr)
-            return i
-    print("MacBook Pro Microphone not found, falling back to default input device", file=sys.stderr)
-    default_device = sd.default.device
-    # sd.default.device can be an int, a tuple (in, out), or a dict depending on version
-    if isinstance(default_device, dict):
-        return default_device['input']
-    elif isinstance(default_device, (list, tuple)):
-        return default_device[0]
-    else:
-        return int(default_device)
-
-# Set device (default to MacBook Pro Microphone or fallback)
-device_index = find_macbook_pro_mic()
-_fallback_idx = device_index if device_index is not None else 0
-device_info = get_device_info(device_index) or sd.query_devices()[_fallback_idx]
-channels = device_info['max_input_channels'] if device_info['max_input_channels'] > 0 else 1
+# sounddevice and speech_recognition are only needed for online/offline modes.
+# Whisper mode receives audio from the broadcaster via stdin — no mic access needed.
+device_index = None
 samplerate = 16000
-
-sd.default.samplerate = samplerate
-sd.default.channels = channels
-sd.default.device = device_index
-
-print(f"Using device {device_index} ({device_info['name']}) with {channels} channels, samplerate={samplerate}", file=sys.stderr)
-print("Available audio devices:", sd.query_devices(), file=sys.stderr)
-
-# Initialize speech recognizer based on mode
-recognizer = sr.Recognizer()
+recognizer = None
 vosk_model = None
 vosk_recognizer = None
 whisper_model = None
+
+if TRANSCRIPTION_MODE != 'whisper':
+    import sounddevice as sd
+    import speech_recognition as sr
+
+    def get_device_info(device_index):
+        try:
+            devices = sd.query_devices()
+            if 0 <= device_index < len(devices):
+                device_info = devices[device_index]
+                print(f"Device {device_index} ({device_info['name']}): Max input channels = {device_info['max_input_channels']}", file=sys.stderr)
+                return device_info
+            else:
+                raise ValueError(f"Invalid device index: {device_index}")
+        except Exception as e:
+            print(f"Error querying device {device_index}: {e}", file=sys.stderr)
+            return None
+
+    def find_macbook_pro_mic():
+        devices = sd.query_devices()
+        for i, device in enumerate(devices):
+            if device['name'] == 'MacBook Pro Microphone' and device['max_input_channels'] > 0:
+                print(f"Found MacBook Pro Microphone at index {i}", file=sys.stderr)
+                return i
+        print("MacBook Pro Microphone not found, falling back to default input device", file=sys.stderr)
+        default_device = sd.default.device
+        if isinstance(default_device, dict):
+            return default_device['input']
+        elif isinstance(default_device, (list, tuple)):
+            return default_device[0]
+        else:
+            return int(default_device)
+
+    device_index = find_macbook_pro_mic()
+    _fallback_idx = device_index if device_index is not None else 0
+    device_info = get_device_info(device_index) or sd.query_devices()[_fallback_idx]
+    channels = device_info['max_input_channels'] if device_info['max_input_channels'] > 0 else 1
+
+    sd.default.samplerate = samplerate
+    sd.default.channels = channels
+    sd.default.device = device_index
+
+    print(f"Using device {device_index} ({device_info['name']}) with {channels} channels, samplerate={samplerate}", file=sys.stderr)
+    print("Available audio devices:", sd.query_devices(), file=sys.stderr)
+
+    recognizer = sr.Recognizer()
 
 if TRANSCRIPTION_MODE == 'offline':
     try:
@@ -111,9 +113,12 @@ elif TRANSCRIPTION_MODE == 'whisper':
         whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
         print(f"STATUS:Whisper model ready", flush=True)
         print(f"Whisper model loaded successfully - WHISPER MODE ACTIVE", file=sys.stderr)
-    except ImportError:
-        print("STATUS:⚠️ Translation requires faster-whisper. Open Terminal and run: pip3 install faster-whisper --break-system-packages — then restart the app.", flush=True)
-        print("ERROR: faster-whisper not installed.", file=sys.stderr)
+    except Exception as e:
+        print(f"ERROR: Failed to load Whisper model: {e}", file=sys.stderr)
+        if isinstance(e, ImportError):
+            print("STATUS:⚠️ Translation requires faster-whisper. Open Terminal and run: pip3 install faster-whisper --break-system-packages — then restart the app.", flush=True)
+        else:
+            print(f"STATUS:❌ Translation failed to load: {e}", flush=True)
         TRANSCRIPTION_MODE = 'none'
 
 print(f"Transcription mode: {TRANSCRIPTION_MODE.upper()}", file=sys.stderr)

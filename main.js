@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell, net, session } = require('electron');
+const { app, BrowserWindow, dialog, shell, net, session, Menu } = require('electron');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -310,7 +310,7 @@ function createBroadcasterWindow(ip, port) {
     });
 }
 
-async function checkForUpdates() {
+async function checkForUpdates({ silent = true } = {}) {
     try {
         const response = await net.fetch(
             'https://api.github.com/repos/mbyrdLCS/audiobroadcaster/releases/latest',
@@ -331,10 +331,72 @@ async function checkForUpdates() {
             if (result.response === 0) {
                 shell.openExternal('https://github.com/mbyrdLCS/audiobroadcaster/releases/latest');
             }
+        } else if (!silent) {
+            await dialog.showMessageBox(mainWindow, {
+                type: 'info',
+                title: 'No Updates Available',
+                message: 'Audio Broadcaster is up to date.',
+                detail: `You are running version ${currentVersion}, which is the latest release.`,
+                buttons: ['OK']
+            });
         }
     } catch (err) {
         console.log('Update check failed:', err.message);
+        if (!silent) {
+            await dialog.showMessageBox(mainWindow, {
+                type: 'warning',
+                title: 'Update Check Failed',
+                message: 'Could not check for updates.',
+                detail: 'Please check your internet connection and try again, or visit the downloads page manually.',
+                buttons: ['Open Downloads Page', 'Cancel'],
+                defaultId: 0
+            }).then(({ response }) => {
+                if (response === 0) shell.openExternal('https://github.com/mbyrdLCS/audiobroadcaster/releases');
+            });
+        }
     }
+}
+
+function buildMenu() {
+    const template = [
+        {
+            label: app.name,
+            submenu: [
+                { role: 'about' },
+                {
+                    label: 'Check for Updates…',
+                    click: () => checkForUpdates({ silent: false })
+                },
+                { type: 'separator' },
+                { role: 'services' },
+                { type: 'separator' },
+                { role: 'hide' },
+                { role: 'hideOthers' },
+                { role: 'unhide' },
+                { type: 'separator' },
+                { role: 'quit' }
+            ]
+        },
+        {
+            label: 'Help',
+            submenu: [
+                {
+                    label: 'Documentation',
+                    click: () => shell.openExternal('https://github.com/mbyrdLCS/audiobroadcaster#readme')
+                },
+                { type: 'separator' },
+                {
+                    label: 'All Downloads & Release Notes',
+                    click: () => shell.openExternal('https://github.com/mbyrdLCS/audiobroadcaster/releases')
+                },
+                {
+                    label: 'Check for Updates…',
+                    click: () => checkForUpdates({ silent: false })
+                }
+            ]
+        }
+    ];
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 app.whenReady().then(async () => {
@@ -344,6 +406,7 @@ app.whenReady().then(async () => {
     });
     session.defaultSession.setPermissionCheckHandler(() => true);
 
+    buildMenu();
     const { ip, port } = await startServer();
     createBroadcasterWindow(ip, port);
 });

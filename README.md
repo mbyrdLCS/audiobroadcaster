@@ -136,13 +136,23 @@ npm start
 
 ### Build DMGs
 
-Signing and notarization need your Apple ID and an app-specific password
-(generate one at account.apple.com → Sign-In and Security → App-Specific
-Passwords). Pass them as environment variables — never commit them:
+Notarization credentials live in the macOS keychain. One-time setup: generate
+an app-specific password at account.apple.com → Sign-In and Security →
+App-Specific Passwords, then store it:
 
 ```bash
-APPLE_ID=you@example.com APPLE_APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx npm run build
+xcrun notarytool store-credentials audiobroadcaster \
+  --apple-id you@example.com --team-id QLSQ27WR56 --password xxxx-xxxx-xxxx-xxxx
 ```
+
+After that, building is just:
+
+```bash
+npm run build
+```
+
+(On CI or another machine, `APPLE_ID` and `APPLE_APP_SPECIFIC_PASSWORD`
+environment variables override the keychain. Never commit credentials.)
 
 Outputs to `dist/`:
 - `Audio Broadcaster-x.x.x.dmg` — Intel Mac

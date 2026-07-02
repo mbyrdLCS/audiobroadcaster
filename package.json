@@ -51,6 +51,10 @@
       {
         "from": "resources/whisper",
         "to": "whisper"
+      },
+      {
+        "from": "THIRD_PARTY_LICENSES.md",
+        "to": "THIRD_PARTY_LICENSES.md"
       }
     ],
     "asar": true,

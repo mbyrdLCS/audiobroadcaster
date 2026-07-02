@@ -48,7 +48,7 @@ If you accidentally clicked Deny, go to **System Settings → Privacy & Security
 1. Open Audio Broadcaster — a window appears showing the connection URL
 2. Share the **listener URL** (shown on screen) with your congregation via text or display it on a screen
 3. Click **Start Broadcasting** to begin streaming audio
-4. Toggle **Translation** on/off — when ON, listeners can receive translated speech in their chosen language
+4. Toggle **Transcription** on/off — when ON, listeners can receive the transcribed text in their chosen language
 
 ### Listeners (phones and tablets)
 

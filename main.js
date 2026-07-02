@@ -133,7 +133,7 @@ async function startWhisperServer() {
         return;
     }
 
-    sendStatus('⏳ Loading translation model, please wait...');
+    sendStatus('⏳ Loading transcription model, please wait...');
     try {
         whisperPort = await findFreePort();
         const args = [
@@ -175,7 +175,7 @@ async function startWhisperServer() {
         whisperReady = true;
         whisperRestarts = 0;
         console.log('whisper-server ready');
-        sendStatus('✓ Translation ready');
+        sendStatus('✓ Transcription ready');
     } catch (err) {
         console.error(`whisper-server startup failed: ${err.message}`);
         sendStatus(`❌ Transcription failed to start: ${err.message}`);
@@ -532,6 +532,14 @@ function buildMenu() {
                 {
                     label: 'Documentation',
                     click: () => shell.openExternal('https://github.com/mbyrdLCS/audiobroadcaster#readme')
+                },
+                {
+                    label: 'Third-Party Licenses',
+                    click: () => shell.openPath(
+                        app.isPackaged
+                            ? path.join(process.resourcesPath, 'THIRD_PARTY_LICENSES.md')
+                            : path.join(__dirname, 'THIRD_PARTY_LICENSES.md')
+                    )
                 },
                 { type: 'separator' },
                 {

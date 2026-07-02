@@ -176,7 +176,7 @@
         <select id="audioSource"></select>
         <button id="start">Start Broadcasting & Transcription</button>
         <button id="stop" disabled>Stop Broadcasting</button>
-        <button id="toggleTranslation">Translation: ON</button>
+        <button id="toggleTranslation">Transcription: ON</button>
         <div id="pythonStatus" style="display:none; background: rgba(255,200,0,0.15); border-radius: 10px; padding: 8px 14px; margin: 8px 0; font-size: 0.85em; color: #ffe066; text-align:left;"></div>
         <div id="serverInfo"><strong>Listeners can connect at:</strong> <span id="listenerUrl"></span><button id="copyUrlButton">Copy URL</button></div>
         <div id="listenerCount">Listeners: 0</div>
@@ -446,7 +446,7 @@
         document.getElementById('toggleTranslation').addEventListener('click', () => {
             translationEnabled = !translationEnabled;
             socket.emit('toggle-translation', translationEnabled);
-            document.getElementById('toggleTranslation').textContent = `Translation: ${translationEnabled ? 'ON' : 'OFF'}`;
+            document.getElementById('toggleTranslation').textContent = `Transcription: ${translationEnabled ? 'ON' : 'OFF'}`;
             document.getElementById('toggleTranslation').style.background = translationEnabled
                 ? 'linear-gradient(45deg, #28a745, #218838)'
                 : 'linear-gradient(45deg, #dc3545, #c82333)';

@@ -537,8 +537,8 @@ function buildMenu() {
                     label: 'Third-Party Licenses',
                     click: () => shell.openPath(
                         app.isPackaged
-                            ? path.join(process.resourcesPath, 'THIRD_PARTY_LICENSES.md')
-                            : path.join(__dirname, 'THIRD_PARTY_LICENSES.md')
+                            ? path.join(process.resourcesPath, 'THIRD_PARTY_LICENSES.txt')
+                            : path.join(__dirname, 'THIRD_PARTY_LICENSES.txt')
                     )
                 },
                 { type: 'separator' },

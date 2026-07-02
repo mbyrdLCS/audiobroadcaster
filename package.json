@@ -53,8 +53,8 @@
         "to": "whisper"
       },
       {
-        "from": "THIRD_PARTY_LICENSES.md",
-        "to": "THIRD_PARTY_LICENSES.md"
+        "from": "THIRD_PARTY_LICENSES.txt",
+        "to": "THIRD_PARTY_LICENSES.txt"
       }
     ],
     "asar": true,

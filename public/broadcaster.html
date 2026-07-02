@@ -198,6 +198,10 @@
         let workletNode = null;
         let translationEnabled = true;
         let listenerCount = 0;
+        // Broadcaster token — received via IPC server-info, required by the server
+        // when emitting 'broadcaster'.  Set before the socket is created on first
+        // load; also available on reconnects because IPC is delivered only once.
+        let broadcasterToken = null;
 
         function log(msg) {
             console.log(msg);
@@ -219,14 +223,27 @@
                 const serverPort = info.port;
                 const serverUrl = `http://localhost:${serverPort}`;
                 const listenerUrl = `http://${serverIp}:${serverPort}/listen_v2.html`;
-                
+
+                // Store token before the socket is created so it is always
+                // available when 'connect' fires.  On reconnects the socket
+                // already exists; if it happens to be connected at this point
+                // (shouldn't occur on first load, but handled defensively),
+                // re-emit 'broadcaster' immediately with the token.
+                broadcasterToken = info.token;
+
                 document.querySelector('meta[http-equiv="Content-Security-Policy"]').setAttribute('content',
                     `default-src 'self' http://${serverIp}:* ws://${serverIp}:*; script-src 'self' https://cdn.socket.io 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; connect-src 'self' ws://${serverIp}:* http://${serverIp}:* https:`
                 );
 
                 document.getElementById('listenerUrl').innerHTML = `<a href="${listenerUrl}" target="_blank">${listenerUrl}</a>`;
                 log(`Connecting to server at ${serverUrl}`);
-                initializeSocket(serverUrl);
+
+                if (socket && socket.connected) {
+                    // Defensive: socket already connected before server-info arrived
+                    socket.emit('broadcaster', broadcasterToken);
+                } else {
+                    initializeSocket(serverUrl);
+                }
             } catch (error) {
                 log(`Server connection error: ${error.message}`);
             }
@@ -247,7 +264,10 @@
         function setupSocketListeners() {
             socket.on('connect', () => {
                 log(`Connected to server via ${socket.io.engine.transport.name}`);
-                socket.emit('broadcaster');
+                // broadcasterToken is always set before the first 'connect' fires
+                // (socket is created inside onServerInfo after token is stored).
+                // On reconnects the token was already received, so it is available here too.
+                socket.emit('broadcaster', broadcasterToken);
             });
             socket.on('connect_error', (err) => log(`Socket connect error: ${err.message}`));
             socket.on('new-listener', (listenerId) => {

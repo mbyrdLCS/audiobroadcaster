@@ -5,14 +5,21 @@ const { Server } = require('socket.io');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const crypto = require('crypto');
 const nodeNet = require('node:net');
 const { spawn } = require('child_process');
 let appIsQuitting = false;
 
 // Prevent EPIPE and other socket errors from showing a crash dialog
 process.on('uncaughtException', (err) => {
-    console.error('Uncaught exception (handled):', err.message);
+    console.error('Uncaught exception (handled):', err.stack || err.message);
 });
+
+// Token generated once per process lifetime; sent to the broadcaster window via
+// IPC and required when the page emits 'broadcaster' to register itself.
+// BROADCASTER_TOKEN env override exists so scripts/test-transcription.js can
+// authenticate in development.
+const broadcasterToken = process.env.BROADCASTER_TOKEN || crypto.randomBytes(16).toString('hex');
 
 const expressApp = express();
 const server = http.createServer(expressApp);
@@ -300,7 +307,11 @@ function maybeTranscribe() {
 io.on('connection', (socket) => {
     console.log(`Client connected: ${socket.id}`);
 
-    socket.on('broadcaster', () => {
+    socket.on('broadcaster', (token) => {
+        if (token !== broadcasterToken) {
+            console.warn(`Unauthorized broadcaster attempt from ${socket.id} — token mismatch`);
+            return;
+        }
         broadcasterSocket = socket;
         console.log(`Broadcaster registered: ${socket.id}`);
         listeners.forEach((_, listenerId) => socket.emit('new-listener', listenerId));
@@ -336,6 +347,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('start-transcription', () => {
+        if (socket !== broadcasterSocket) return;
         console.log('Received start-transcription event');
         transcriptionActive = true;
         resetPcmBuffer();
@@ -343,12 +355,14 @@ io.on('connection', (socket) => {
     });
 
     socket.on('stop-transcription', () => {
+        if (socket !== broadcasterSocket) return;
         console.log('Received stop-transcription event');
         transcriptionActive = false;
         resetPcmBuffer();
     });
 
     socket.on('toggle-translation', (state) => {
+        if (socket !== broadcasterSocket) return;
         translationEnabled = state;
         console.log(`Translation ${state ? 'enabled' : 'disabled'}`);
         // Notify all listeners of translation state change
@@ -426,9 +440,23 @@ function createBroadcasterWindow(ip, port) {
     });
     mainWindow.loadURL(`http://localhost:${port}/broadcaster.html`);
     mainWindow.webContents.on('did-finish-load', () => {
-        mainWindow.webContents.send('server-info', { ip, port });
+        mainWindow.webContents.send('server-info', { ip, port, token: broadcasterToken });
         checkForUpdates();
     });
+}
+
+// Returns > 0 if a is strictly greater than b, 0 if equal, < 0 if less.
+// Splits on '.' and compares numerically — no external dependencies.
+function compareVersions(a, b) {
+    const aParts = a.split('.').map(Number);
+    const bParts = b.split('.').map(Number);
+    const len = Math.max(aParts.length, bParts.length);
+    for (let i = 0; i < len; i++) {
+        const av = aParts[i] || 0;
+        const bv = bParts[i] || 0;
+        if (av !== bv) return av - bv;
+    }
+    return 0;
 }
 
 async function checkForUpdates({ silent = true } = {}) {
@@ -440,7 +468,7 @@ async function checkForUpdates({ silent = true } = {}) {
         const data = await response.json();
         const latestVersion = data.tag_name.replace(/^v/, '');
         const currentVersion = app.getVersion();
-        if (latestVersion !== currentVersion) {
+        if (compareVersions(latestVersion, currentVersion) > 0) {
             const result = await dialog.showMessageBox(mainWindow, {
                 type: 'info',
                 title: 'Update Available',

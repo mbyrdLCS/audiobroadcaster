@@ -6,6 +6,10 @@
 // transcribed-text event received and exits 0 if any arrive.
 //
 // Usage: node scripts/test-transcription.js <file.wav> [durationSeconds]
+//
+// The app requires a broadcaster token; start it with a known one:
+//   BROADCASTER_TOKEN=devtest npm start
+//   BROADCASTER_TOKEN=devtest APP_URL=http://localhost:<port> node scripts/test-transcription.js <file.wav>
 const fs = require('fs');
 const { io } = require('socket.io-client');
 
@@ -27,7 +31,7 @@ const socket = io(process.env.APP_URL || 'http://localhost:3000', { transports: 
 
 socket.on('connect', () => {
     console.log('Connected, registering as broadcaster...');
-    socket.emit('broadcaster');
+    socket.emit('broadcaster', process.env.BROADCASTER_TOKEN || null);
     socket.emit('start-transcription');
 });
 

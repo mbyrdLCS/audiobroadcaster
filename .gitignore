@@ -70,6 +70,9 @@ vosk-model-*/
 *.log
 logs/
 
+# Code signing certificates
+*.cer
+
 # Environment variables
 .env
 .env.local

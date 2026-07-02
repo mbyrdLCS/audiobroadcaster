@@ -17,7 +17,7 @@ Audio Broadcaster takes the audio from your church's live stream and makes it av
 
 | Item | Details |
 |------|---------|
-| A Mac | macOS 10.13 or newer |
+| A Mac | macOS 10.15 (Catalina) or newer |
 | Audio input from your live stream | USB audio interface, mixer output, or built-in mic |
 | Church Wi-Fi | The Mac and all phones must be on the same network |
 | B1 app configured | The listener URL gets added as an external page in B1 |

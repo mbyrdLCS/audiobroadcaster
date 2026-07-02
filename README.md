@@ -4,7 +4,6 @@ A real-time audio broadcasting application with live speech-to-text transcriptio
 
 [![License](https://img.shields.io/badge/License-Non--Commercial-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-16%2B-green)](https://nodejs.org/)
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 [![Electron](https://img.shields.io/badge/Electron-Desktop%20App-47848F)](https://www.electronjs.org/)
 
 ---
@@ -24,30 +23,17 @@ Not sure which you have? Click the Apple menu → About This Mac. If it says "Ap
 
 ---
 
-### Step 2 — Install Python 3 (one-time setup)
-
-The app requires Python 3 and two audio packages. Open **Terminal** (search for it in Spotlight) and run:
-
-```bash
-pip3 install --user SpeechRecognition sounddevice
-```
-
-If `pip3` is not found, install Python 3 first from [python.org/downloads](https://www.python.org/downloads/) then run the command above again.
-
-If you see an **"externally managed environment"** error (common on Macs with Homebrew Python), run this instead:
-```bash
-pip3 install --break-system-packages SpeechRecognition sounddevice
-```
+> **Transcription is built in** — no Python or additional software required.
 
 ---
 
-### Step 3 — Open the DMG
+### Step 2 — Open the DMG
 
 Double-click the downloaded DMG file and drag **Audio Broadcaster** to your Applications folder.
 
 ---
 
-### Step 4 — Grant microphone access
+### Step 3 — Grant microphone access
 
 The first time the app runs, macOS will ask for microphone permission. Click **Allow**.
 
@@ -99,7 +85,7 @@ If you accidentally clicked Deny, go to **System Settings → Privacy & Security
 ## Features
 
 - **Real-time audio streaming** via WebRTC — low latency, no delay
-- **Automatic transcription** using Google Speech Recognition (free, requires internet)
+- **Automatic transcription** using bundled whisper.cpp (offline, no API keys required)
 - **Per-listener language selection** — each person picks their own language independently
 - **Text-to-speech translation** — hear the sermon in your language
 - **Works on any device** — listeners use any phone browser, no app install required
@@ -124,8 +110,8 @@ const MYMEMORY_EMAIL = 'you@example.com';
 
 ### Prerequisites
 
+- macOS 10.15 (Catalina) or later
 - Node.js v16+
-- Python 3.8+
 - npm
 
 ### Setup
@@ -134,14 +120,12 @@ const MYMEMORY_EMAIL = 'you@example.com';
 git clone https://github.com/mbyrdLCS/audiobroadcaster.git
 cd audiobroadcaster
 
+# Build the bundled whisper.cpp binary and download models (one-time)
+# This populates resources/whisper/ which is bundled into the DMG
+./scripts/build-whisper.sh
+
 # Install Node dependencies
 npm install
-
-# Set up Python environment
-python3 -m venv venv
-source venv/bin/activate        # macOS/Linux
-# venv\Scripts\activate         # Windows
-pip install --user -r requirements.txt
 ```
 
 ### Run in development
@@ -162,43 +146,7 @@ Outputs to `dist/`:
 
 ---
 
-## Offline Transcription (no internet)
-
-By default the app uses Google's Speech API (requires internet). For churches without internet:
-
-**Option 1 — Vosk (basic offline)**
-
-```bash
-# Download English model (39 MB)
-curl -O https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
-unzip vosk-model-small-en-us-0.15.zip
-mv vosk-model-small-en-us-0.15 vosk-model
-pip3 install vosk
-```
-
-Edit `transcribe.py` and set `TRANSCRIPTION_MODE = 'offline'`
-
-**Option 2 — Whisper (more accurate offline)**
-
-```bash
-pip3 install faster-whisper
-```
-
-Edit `transcribe.py` and set `TRANSCRIPTION_MODE = 'whisper'`
-
-> Note: Translation always requires internet (MyMemory API). Offline mode affects transcription only.
-
----
-
 ## Troubleshooting
-
-### "Python not found" or app won't start transcription
-
-Make sure Python 3 is installed and packages are set up:
-```bash
-python3 --version
-pip3 install --user SpeechRecognition sounddevice
-```
 
 ### Microphone not working
 
@@ -224,9 +172,11 @@ pip3 install --user SpeechRecognition sounddevice
 audio-broadcaster/
 ├── main.js              # Electron main process & server
 ├── preload.js           # Electron preload script
-├── transcribe.py        # Python transcription service
 ├── package.json         # Node.js config & build settings
-├── requirements.txt     # Python dependencies
+├── scripts/
+│   └── build-whisper.sh # Builds whisper.cpp binary + downloads models (run once)
+├── resources/
+│   └── whisper/         # Built binary & model (git-ignored; populated by build-whisper.sh)
 └── public/
     ├── broadcaster.html # Broadcaster interface
     └── listen_v2.html   # Listener interface

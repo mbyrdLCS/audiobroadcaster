@@ -22,26 +22,11 @@ Not sure which you have? Click the Apple menu → **About This Mac**. If it says
 2. Drag **Audio Broadcaster** into your Applications folder
 3. Eject the DMG
 
-## Step 3 — Install Python 3 (one-time)
-
-The transcription and translation features require Python 3. Open **Terminal** (search for it in Spotlight) and run:
-
-```bash
-pip3 install --user SpeechRecognition sounddevice
-```
-
-If you see a **"Python not found"** error, install Python 3 first from [python.org/downloads](https://www.python.org/downloads/), then run the command above again.
-
-If you see an **"externally managed environment"** error, run this instead:
-```bash
-pip3 install --break-system-packages SpeechRecognition sounddevice
-```
-
 :::note
-If you only need audio streaming (no transcription or translation), you can skip this step.
+Transcription is built in — no additional software or Python installation required.
 :::
 
-## Step 4 — Open the App
+## Step 3 — Open the App
 
 Open **Audio Broadcaster** from your Applications folder. The first time you open it, macOS will ask for **microphone permission** — click **Allow**.
 

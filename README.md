@@ -136,8 +136,12 @@ npm start
 
 ### Build DMGs
 
+Signing and notarization need your Apple ID and an app-specific password
+(generate one at account.apple.com → Sign-In and Security → App-Specific
+Passwords). Pass them as environment variables — never commit them:
+
 ```bash
-npm run build
+APPLE_ID=you@example.com APPLE_APP_SPECIFIC_PASSWORD=xxxx-xxxx-xxxx-xxxx npm run build
 ```
 
 Outputs to `dist/`:

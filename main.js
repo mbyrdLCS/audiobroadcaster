@@ -4,6 +4,8 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
+const nodeNet = require('node:net');
 const { spawn } = require('child_process');
 let appIsQuitting = false;
 
@@ -35,129 +37,264 @@ const listeners = new Map();
 let translationEnabled = true;
 let transcriptionActive = false;
 
-let pythonProcess;
-let pythonReady = false;
-
 function sendStatus(msg) {
     if (broadcasterSocket) {
         try { broadcasterSocket.emit('python-status', msg); } catch (e) {}
     }
 }
 
-function downloadModelAndStart() {
-    sendStatus('⏳ Loading translation model, please wait...');
-    // Always verify the model loads correctly before starting Python.
-    // If the model is already cached this takes ~5 seconds.
-    // If it needs to download it takes ~1-2 minutes (145MB).
-    const verify = spawn('python3', ['-c', 'from faster_whisper import WhisperModel; WhisperModel("base.en", device="cpu", compute_type="int8"); print("ok")']);
-    let output = '';
-    verify.stdout.on('data', (d) => { output += d.toString(); });
-    verify.stderr.on('data', (d) => { console.log('model verify:', d.toString()); });
-    verify.on('close', (code) => {
-        if (code === 0 && output.includes('ok')) {
-            sendStatus('✓ Translation ready');
-            startPythonProcess();
-        } else {
-            sendStatus('❌ Could not load translation model. Check your internet connection and restart the app.');
-        }
-    });
-    verify.on('error', () => {
-        sendStatus('❌ Could not load translation model. Check your internet connection and restart the app.');
-    });
+// ============================================================================
+// Transcription via whisper.cpp (whisper-server)
+//
+// A bundled whisper-server binary (built by scripts/build-whisper.sh) runs as
+// a child process with the model resident in memory. Audio chunks from the
+// broadcaster accumulate here in Node until ~5 seconds are buffered, then get
+// wrapped in a WAV header and POSTed to the server's /inference endpoint.
+// The server resamples 44100 Hz -> 16 kHz internally (miniaudio).
+// ============================================================================
+
+const SAMPLE_RATE = 44100;          // must match broadcaster.html AudioContext
+const CHUNK_SECONDS = 5;            // audio buffered per inference
+const MAX_BUFFER_SECONDS = 30;      // drop buffer beyond this (inference stuck)
+const WHISPER_MAX_RESTARTS = 3;
+
+let whisperProcess = null;
+let whisperPort = 0;
+let whisperReady = false;
+let whisperStarting = false;
+let whisperRestarts = 0;
+
+let pcmChunks = [];
+let pcmSamples = 0;
+let inferenceInFlight = false;
+
+function resetPcmBuffer() {
+    pcmChunks = [];
+    pcmSamples = 0;
 }
 
-function ensureDependenciesAndStart() {
-    // Check if all required packages are installed
-    const check = spawn('python3', ['-c', 'import faster_whisper, sounddevice, speech_recognition, numpy']);
-    check.on('close', (code) => {
-        if (code === 0) {
-            downloadModelAndStart();
-        } else {
-            sendStatus('⏳ Setting up translation for the first time, please wait...');
-            const packages = ['faster-whisper', 'sounddevice', 'SpeechRecognition', 'numpy'];
-            const install = spawn('pip3', ['install', ...packages, '--break-system-packages']);
-            install.stderr.on('data', (data) => console.log('pip install:', data.toString()));
-            install.on('close', (installCode) => {
-                if (installCode === 0) {
-                    downloadModelAndStart();
-                } else {
-                    sendStatus('❌ Could not set up translation automatically. Please contact support.');
-                }
-            });
-            install.on('error', () => {
-                sendStatus('❌ Could not set up translation automatically. Please contact support.');
-            });
-        }
-    });
-    check.on('error', () => {
-        sendStatus('❌ Python not found. Please install Python 3 from python.org then restart the app.');
-    });
+function whisperDir() {
+    return app.isPackaged
+        ? path.join(process.resourcesPath, 'whisper')
+        : path.join(__dirname, 'resources', 'whisper');
 }
 
-function startPythonProcess() {
-    console.log('Starting Python process for transcription...');
-
-    let pythonCmd, scriptPath;
-    if (app.isPackaged) {
-        // Packaged app: transcribe.py is in extraResources, use system python3
-        scriptPath = path.join(process.resourcesPath, 'transcribe.py');
-        pythonCmd = 'python3';
-    } else {
-        // Development: use venv
-        pythonCmd = process.platform === 'win32'
-            ? path.join(__dirname, 'venv', 'Scripts', 'python.exe')
-            : path.join(__dirname, 'venv', 'bin', 'python');
-        scriptPath = path.join(__dirname, 'transcribe.py');
-    }
-
-    pythonProcess = spawn(
-        pythonCmd,
-        [scriptPath],
-        { cwd: path.dirname(scriptPath) }
-    );
-
-    pythonProcess.stdout.on('data', (data) => {
-        const lines = data.toString().split('\n');
-        lines.forEach((line) => {
-            line = line.trim();
-            if (!line) return;
-            // Filter out Intel MKL and other system warnings
-            if (line.startsWith('Intel') || line.startsWith('OMP:') || line.startsWith('WARNING:')) return;
-            // Handle status messages (model download/ready)
-            if (line.startsWith('STATUS:')) {
-                const status = line.slice(7);
-                console.log(`Python status: ${status}`);
-                sendStatus(status);
-                return;
-            }
-            // Regular transcription
-            if (broadcasterSocket) {
-                console.log(`Transcribed: ${line}`);
-                try { broadcasterSocket.emit('transcribed-text', { text: line }); } catch (e) { console.error('Broadcaster emit error:', e.message); }
-                if (translationEnabled) {
-                    listeners.forEach((l) => {
-                        try { l.emit('transcribed-text', { text: line }); } catch (e) {}
-                    });
-                }
-            }
+function findFreePort() {
+    return new Promise((resolve, reject) => {
+        const srv = nodeNet.createServer();
+        srv.on('error', reject);
+        srv.listen(0, '127.0.0.1', () => {
+            const port = srv.address().port;
+            srv.close(() => resolve(port));
         });
     });
+}
 
-    pythonProcess.stderr.on('data', (data) => {
-        console.error(`Python stderr: ${data.toString()}`);
+// whisper-server loads the model before it starts listening, so the port
+// accepting connections doubles as the "model ready" signal.
+function waitForWhisperReady() {
+    return new Promise((resolve, reject) => {
+        let attempts = 0;
+        const poll = () => {
+            if (!whisperProcess) return reject(new Error('whisper-server exited during startup'));
+            const req = http.get({ host: '127.0.0.1', port: whisperPort, path: '/' }, (res) => {
+                res.resume();
+                resolve();
+            });
+            req.on('error', () => {
+                if (++attempts > 60) reject(new Error('whisper-server did not become ready'));
+                else setTimeout(poll, 500);
+            });
+        };
+        setTimeout(poll, 300);
     });
+}
 
-    pythonProcess.on('close', (code) => {
-        console.log(`Python process exited with code ${code}`);
-        if (code !== 0 && !appIsQuitting) {
-            sendStatus(`❌ Translation crashed (code ${code}). Restarting...`);
-            setTimeout(() => startPythonProcess(), 2000);
+async function startWhisperServer() {
+    if (whisperProcess || whisperStarting) return;
+    whisperStarting = true;
+
+    const dir = whisperDir();
+    const bin = path.join(dir, 'whisper-server');
+    const model = path.join(dir, 'ggml-base.en.bin');
+    const vadModel = path.join(dir, 'ggml-silero-v5.1.2.bin');
+
+    if (!fs.existsSync(bin) || !fs.existsSync(model)) {
+        console.error(`whisper-server or model missing in ${dir}`);
+        sendStatus('❌ Transcription files are missing. Please reinstall the app.');
+        whisperStarting = false;
+        return;
+    }
+
+    sendStatus('⏳ Loading translation model, please wait...');
+    try {
+        whisperPort = await findFreePort();
+        const args = [
+            '-m', model,
+            '--host', '127.0.0.1',
+            '--port', String(whisperPort),
+            '-l', 'en',
+            '-bs', '5',       // beam size, matches previous faster-whisper setting
+            '-nth', '0.8'     // no-speech threshold, matches previous setting
+        ];
+        // VAD prevents Whisper hallucinating text during silence (see v1.2.7)
+        if (fs.existsSync(vadModel)) {
+            args.push('--vad', '-vm', vadModel, '-vsd', '300');
         }
-    });
 
-    pythonProcess.on('error', (err) => {
-        console.error(`Python process error: ${err.message}`);
+        console.log(`Starting whisper-server on port ${whisperPort}...`);
+        whisperProcess = spawn(bin, args, { cwd: dir });
+        whisperProcess.stdout.on('data', (d) => console.log('whisper-server:', d.toString().trim()));
+        whisperProcess.stderr.on('data', (d) => console.log('whisper-server:', d.toString().trim()));
+        whisperProcess.on('error', (err) => {
+            console.error(`whisper-server spawn error: ${err.message}`);
+            sendStatus(`❌ Could not start transcription: ${err.message}`);
+        });
+        whisperProcess.on('close', (code) => {
+            console.log(`whisper-server exited with code ${code}`);
+            whisperProcess = null;
+            whisperReady = false;
+            if (appIsQuitting || code === 0) return;
+            whisperRestarts++;
+            if (whisperRestarts > WHISPER_MAX_RESTARTS) {
+                sendStatus('❌ Transcription keeps crashing. Please restart the app or contact support.');
+                return;
+            }
+            sendStatus(`❌ Transcription crashed (code ${code}). Restarting...`);
+            setTimeout(() => startWhisperServer(), 2000 * whisperRestarts);
+        });
+
+        await waitForWhisperReady();
+        whisperReady = true;
+        whisperRestarts = 0;
+        console.log('whisper-server ready');
+        sendStatus('✓ Translation ready');
+    } catch (err) {
+        console.error(`whisper-server startup failed: ${err.message}`);
+        sendStatus(`❌ Transcription failed to start: ${err.message}`);
+        if (whisperProcess) whisperProcess.kill();
+    } finally {
+        whisperStarting = false;
+    }
+}
+
+function pcmToWav(pcm, sampleRate) {
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + pcm.length, 4);
+    header.write('WAVE', 8);
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16);              // fmt chunk size
+    header.writeUInt16LE(1, 20);               // PCM
+    header.writeUInt16LE(1, 22);               // mono
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(sampleRate * 2, 28);  // byte rate
+    header.writeUInt16LE(2, 32);               // block align
+    header.writeUInt16LE(16, 34);              // bits per sample
+    header.write('data', 36);
+    header.writeUInt32LE(pcm.length, 40);
+    return Buffer.concat([header, pcm]);
+}
+
+function transcribeWav(wav) {
+    return new Promise((resolve, reject) => {
+        const boundary = '----AudioBroadcasterFormBoundary';
+        const body = Buffer.concat([
+            Buffer.from(
+                `--${boundary}\r\n` +
+                'Content-Disposition: form-data; name="file"; filename="chunk.wav"\r\n' +
+                'Content-Type: audio/wav\r\n\r\n'
+            ),
+            wav,
+            Buffer.from(
+                `\r\n--${boundary}\r\n` +
+                'Content-Disposition: form-data; name="response_format"\r\n\r\n' +
+                'json\r\n' +
+                `--${boundary}--\r\n`
+            )
+        ]);
+        const req = http.request({
+            host: '127.0.0.1',
+            port: whisperPort,
+            path: '/inference',
+            method: 'POST',
+            headers: {
+                'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                'Content-Length': body.length
+            }
+        }, (res) => {
+            let data = '';
+            res.on('data', (d) => { data += d; });
+            res.on('end', () => {
+                if (res.statusCode !== 200) {
+                    return reject(new Error(`whisper-server HTTP ${res.statusCode}: ${data.slice(0, 200)}`));
+                }
+                try {
+                    resolve((JSON.parse(data).text || '').trim());
+                } catch (e) {
+                    reject(new Error(`Bad whisper-server response: ${data.slice(0, 200)}`));
+                }
+            });
+        });
+        req.setTimeout(30000, () => req.destroy(new Error('inference timed out')));
+        req.on('error', reject);
+        req.end(body);
     });
+}
+
+// Profanity filter — blocks common curse words from ever appearing in output
+const PROFANITY = new Set([
+    'fuck', 'fucking', 'fucked', 'fucker', 'fucks',
+    'shit', 'shitting', 'shitty', 'bullshit',
+    'ass', 'asshole', 'asses',
+    'bitch', 'bitches', 'bitching',
+    'damn', 'damned', 'goddamn', 'goddamned',
+    'hell', 'bastard', 'bastards',
+    'crap', 'crappy',
+    'piss', 'pissed', 'pissing',
+    'dick', 'dicks', 'cock', 'cocks',
+    'cunt', 'cunts', 'whore', 'whores',
+    'nigger', 'niggers', 'faggot', 'faggots',
+    'retard', 'retarded'
+]);
+
+function containsProfanity(text) {
+    return text.toLowerCase().split(/\s+/).some(
+        (w) => PROFANITY.has(w.replace(/^[.,!?;:'"]+|[.,!?;:'"]+$/g, ''))
+    );
+}
+
+function removeRepetitiveWords(text) {
+    const words = text.split(/\s+/).filter(Boolean);
+    return words.filter((w, i) => i === 0 || w !== words[i - 1]).join(' ');
+}
+
+function handleTranscript(raw) {
+    const cleaned = removeRepetitiveWords(raw.replace(/\s+/g, ' ').trim());
+    if (!cleaned || containsProfanity(cleaned)) return;
+    console.log(`Transcribed: ${cleaned}`);
+    if (broadcasterSocket) {
+        try { broadcasterSocket.emit('transcribed-text', { text: cleaned }); } catch (e) { console.error('Broadcaster emit error:', e.message); }
+    }
+    if (translationEnabled) {
+        listeners.forEach((l) => {
+            try { l.emit('transcribed-text', { text: cleaned }); } catch (e) {}
+        });
+    }
+}
+
+function maybeTranscribe() {
+    if (inferenceInFlight || pcmSamples < SAMPLE_RATE * CHUNK_SECONDS) return;
+    const pcm = Buffer.concat(pcmChunks);
+    resetPcmBuffer();
+    inferenceInFlight = true;
+    transcribeWav(pcmToWav(pcm, SAMPLE_RATE))
+        .then((text) => { if (text) handleTranscript(text); })
+        .catch((err) => console.error('Transcription error:', err.message))
+        .finally(() => {
+            inferenceInFlight = false;
+            maybeTranscribe();  // buffer may have refilled during inference
+        });
 }
 
 io.on('connection', (socket) => {
@@ -167,10 +304,7 @@ io.on('connection', (socket) => {
         broadcasterSocket = socket;
         console.log(`Broadcaster registered: ${socket.id}`);
         listeners.forEach((_, listenerId) => socket.emit('new-listener', listenerId));
-        if (!pythonReady) {
-            pythonReady = true;
-            ensureDependenciesAndStart();
-        }
+        startWhisperServer();
     });
 
     socket.on('listener', () => {
@@ -186,43 +320,32 @@ io.on('connection', (socket) => {
         listeners.forEach((l) => {
             try { l.emit('audio-chunk', buffer); } catch (e) {}
         });
-        // Pipe audio to Python for transcription (avoids Python opening the mic
-        // simultaneously with the browser, which crashes the Chromium renderer)
-        if (transcriptionActive && pythonProcess && pythonProcess.stdin.writable) {
-            try {
-                const b64 = Buffer.from(buffer).toString('base64');
-                pythonProcess.stdin.write(`AUDIO:${b64}\n`);
-            } catch (e) {}
+        // Buffer audio for transcription (whisper-server never opens the mic,
+        // which avoids the CoreAudio conflict that crashed the renderer)
+        if (transcriptionActive && whisperReady) {
+            const chunk = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+            pcmChunks.push(chunk);
+            pcmSamples += chunk.length / 2;  // Int16 = 2 bytes per sample
+            if (pcmSamples > SAMPLE_RATE * MAX_BUFFER_SECONDS) {
+                console.warn('Transcription buffer overflow, dropping audio');
+                resetPcmBuffer();
+            } else {
+                maybeTranscribe();
+            }
         }
     });
 
     socket.on('start-transcription', () => {
         console.log('Received start-transcription event');
         transcriptionActive = true;
-        if (pythonProcess && pythonProcess.stdin.writable) {
-            pythonProcess.stdin.write('START\n');
-            console.log('Sent START command to Python');
-        } else {
-            console.log('Python process not available, restarting...');
-            startPythonProcess();
-            setTimeout(() => {
-                if (pythonProcess && pythonProcess.stdin.writable) {
-                    pythonProcess.stdin.write('START\n');
-                    console.log('Sent START command to Python after restart');
-                } else {
-                    console.log('Failed to restart Python process');
-                }
-            }, 1000);
-        }
+        resetPcmBuffer();
+        startWhisperServer();  // no-op if already running
     });
 
     socket.on('stop-transcription', () => {
         console.log('Received stop-transcription event');
         transcriptionActive = false;
-        if (pythonProcess && pythonProcess.stdin.writable) {
-            pythonProcess.stdin.write('STOP\n');
-            console.log('Sent STOP command to Python');
-        }
+        resetPcmBuffer();
     });
 
     socket.on('toggle-translation', (state) => {
@@ -237,9 +360,7 @@ io.on('connection', (socket) => {
         if (socket === broadcasterSocket) {
             broadcasterSocket = null;
             transcriptionActive = false;
-            if (pythonProcess && pythonProcess.stdin.writable) {
-                pythonProcess.stdin.write('STOP\n');
-            }
+            resetPcmBuffer();
         } else if (listeners.has(socket.id)) {
             listeners.delete(socket.id);
             if (broadcasterSocket) {
@@ -413,6 +534,6 @@ app.whenReady().then(async () => {
 
 app.on('will-quit', () => {
     appIsQuitting = true;
-    if (pythonProcess) pythonProcess.kill();
+    if (whisperProcess) whisperProcess.kill();
     server.close();
 });

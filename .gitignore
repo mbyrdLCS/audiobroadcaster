@@ -47,6 +47,10 @@ Thumbs.db
 *.flac
 *.ogg
 
+# whisper.cpp source checkout and built artifacts (scripts/build-whisper.sh)
+whisper.cpp/
+resources/whisper/
+
 # Model files
 *.tar.gz
 en-us.tar.gz

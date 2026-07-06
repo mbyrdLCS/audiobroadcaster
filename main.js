@@ -540,11 +540,16 @@ function performDownload(startByte, initialBytesReceived, hash) {
         translationDownloading = false;
         translationProgress = 100;
         translationModelPresent = true;
+        // The user clicked "Enable Offline Translation" to get here — downloading
+        // IS enabling. Requiring another click after a 10-minute download confused
+        // real users (2026-07-06).
+        translationUserEnabled = true;
+        saveTranslationSettings({ enabled: true });
         emitTranslationState();
         sendStatus('✓ Translation model downloaded');
         console.log('Translation model download complete');
 
-        if (translationUserEnabled) startLlamaServer();
+        startLlamaServer();
     }
 
     function onDownloadError(message, keepPart) {

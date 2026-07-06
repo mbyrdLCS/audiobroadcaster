@@ -64,6 +64,7 @@ const SAMPLE_RATE = 44100;          // must match broadcaster.html AudioContext
 const CHUNK_SECONDS = 5;            // audio buffered per inference
 const MAX_BUFFER_SECONDS = 30;      // drop buffer beyond this (inference stuck)
 const WHISPER_MAX_RESTARTS = 3;
+const OVERLAP_SECONDS = 0.5;        // overlap between consecutive inference windows
 
 let whisperProcess = null;
 let whisperPort = 0;
@@ -74,10 +75,14 @@ let whisperRestarts = 0;
 let pcmChunks = [];
 let pcmSamples = 0;
 let inferenceInFlight = false;
+let overlapTail = Buffer.alloc(0);  // tail PCM from previous window
+let lastTranscript = '';            // last emitted transcript (for dedup + prompt)
 
 function resetPcmBuffer() {
     pcmChunks = [];
     pcmSamples = 0;
+    overlapTail = Buffer.alloc(0);
+    lastTranscript = '';
 }
 
 function whisperDir() {
@@ -206,7 +211,10 @@ function pcmToWav(pcm, sampleRate) {
 function transcribeWav(wav) {
     return new Promise((resolve, reject) => {
         const boundary = '----AudioBroadcasterFormBoundary';
-        const body = Buffer.concat([
+        // Deliberately NOT sending a "prompt" context field: feeding Whisper its
+        // own previous transcript triggers repetition-loop hallucinations when
+        // the speech itself is repetitive (common in sermons — verified in test).
+        const parts = [
             Buffer.from(
                 `--${boundary}\r\n` +
                 'Content-Disposition: form-data; name="file"; filename="chunk.wav"\r\n' +
@@ -216,10 +224,11 @@ function transcribeWav(wav) {
             Buffer.from(
                 `\r\n--${boundary}\r\n` +
                 'Content-Disposition: form-data; name="response_format"\r\n\r\n' +
-                'json\r\n' +
-                `--${boundary}--\r\n`
+                'json\r\n'
             )
-        ]);
+        ];
+        parts.push(Buffer.from(`--${boundary}--\r\n`));
+        const body = Buffer.concat(parts);
         const req = http.request({
             host: '127.0.0.1',
             port: whisperPort,
@@ -265,10 +274,38 @@ const PROFANITY = new Set([
     'retard', 'retarded'
 ]);
 
-function containsProfanity(text) {
-    return text.toLowerCase().split(/\s+/).some(
-        (w) => PROFANITY.has(w.replace(/^[.,!?;:'"]+|[.,!?;:'"]+$/g, ''))
-    );
+// Compare last N words of prevText with first N words of newText (N=3,2,1).
+// On the first match, strip those words from the front of newText and return it.
+function dedupeBoundary(prevText, newText) {
+    if (!prevText || !newText) return newText;
+    const strip = (w) => w.toLowerCase().replace(/^[.,!?;:'"]+|[.,!?;:'"]+$/g, '');
+    const prevWords = prevText.trim().split(/\s+/);
+    const newWords = newText.trim().split(/\s+/);
+    for (let n = 3; n >= 1; n--) {
+        if (prevWords.length < n || newWords.length < n) continue;
+        const prevTail = prevWords.slice(-n).map(strip);
+        const newHead = newWords.slice(0, n).map(strip);
+        if (prevTail.every((w, i) => w === newHead[i])) {
+            return newWords.slice(n).join(' ');
+        }
+    }
+    return newText;
+}
+
+// Replace each profane word's core with first-char + asterisks, preserving surrounding punctuation.
+function maskProfanity(text) {
+    return text.split(/\s+/).map((word) => {
+        const leadingMatch = word.match(/^[.,!?;:'"]+/);
+        const trailingMatch = word.match(/[.,!?;:'"]+$/);
+        const leading = leadingMatch ? leadingMatch[0] : '';
+        const trailing = trailingMatch ? trailingMatch[0] : '';
+        const coreEnd = trailing.length > 0 ? word.length - trailing.length : word.length;
+        const core = word.slice(leading.length, coreEnd);
+        if (core && PROFANITY.has(core.toLowerCase())) {
+            return leading + core[0] + '*'.repeat(core.length - 1) + trailing;
+        }
+        return word;
+    }).join(' ');
 }
 
 function removeRepetitiveWords(text) {
@@ -278,24 +315,41 @@ function removeRepetitiveWords(text) {
 
 function handleTranscript(raw) {
     const cleaned = removeRepetitiveWords(raw.replace(/\s+/g, ' ').trim());
-    if (!cleaned || containsProfanity(cleaned)) return;
-    console.log(`Transcribed: ${cleaned}`);
+    if (!cleaned) return;
+    const deduped = dedupeBoundary(lastTranscript, cleaned);
+    // Always update lastTranscript (unmasked) so dedup + prompt context stay accurate.
+    lastTranscript = cleaned;
+    if (!deduped) return;  // entire window was a duplicate of the previous boundary
+    const masked = maskProfanity(deduped);
+    console.log(`Transcribed: ${masked}`);
     if (broadcasterSocket) {
-        try { broadcasterSocket.emit('transcribed-text', { text: cleaned }); } catch (e) { console.error('Broadcaster emit error:', e.message); }
+        try { broadcasterSocket.emit('transcribed-text', { text: masked }); } catch (e) { console.error('Broadcaster emit error:', e.message); }
     }
     if (translationEnabled) {
         listeners.forEach((l) => {
-            try { l.emit('transcribed-text', { text: cleaned }); } catch (e) {}
+            try { l.emit('transcribed-text', { text: masked }); } catch (e) {}
         });
     }
 }
 
 function maybeTranscribe() {
     if (inferenceInFlight || pcmSamples < SAMPLE_RATE * CHUNK_SECONDS) return;
-    const pcm = Buffer.concat(pcmChunks);
-    resetPcmBuffer();
+    const freshPcm = Buffer.concat(pcmChunks);
+    // Keep the tail of freshPcm for the next window (Int16 = 2 bytes/sample).
+    const tailBytes = Math.round(OVERLAP_SECONDS * SAMPLE_RATE) * 2;
+    const newTail = freshPcm.slice(Math.max(0, freshPcm.length - tailBytes));
+    // Prepend the previous window's tail so boundary words appear in both windows.
+    const fullPcm = overlapTail.length > 0
+        ? Buffer.concat([overlapTail, freshPcm])
+        : freshPcm;
+    // Reset only the fresh-audio buffer; preserve lastTranscript and set overlapTail
+    // for the next window.  Hard-reset cases (stop-transcription, disconnect, overflow)
+    // call resetPcmBuffer() directly, which also clears overlapTail and lastTranscript.
+    pcmChunks = [];
+    pcmSamples = 0;
+    overlapTail = newTail;
     inferenceInFlight = true;
-    transcribeWav(pcmToWav(pcm, SAMPLE_RATE))
+    transcribeWav(pcmToWav(fullPcm, SAMPLE_RATE))
         .then((text) => { if (text) handleTranscript(text); })
         .catch((err) => console.error('Transcription error:', err.message))
         .finally(() => {

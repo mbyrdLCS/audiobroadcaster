@@ -198,6 +198,15 @@ audio-broadcaster/
 
 ---
 
+## Contributing
+
+Contributions welcome — especially **Windows support**! The app no longer
+depends on Python, so a Windows port is mostly packaging work. See
+[issue #1](https://github.com/mbyrdLCS/audiobroadcaster/issues/1) for a
+step-by-step outline of what's involved.
+
+---
+
 ## License
 
 This project is licensed under a **Non-Commercial License with Donation Button Requirement**.

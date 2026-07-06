@@ -163,6 +163,69 @@
             line-height: 1.4;
             display: none;
         }
+        #offlineTranslationSection {
+            margin: 8px 0;
+        }
+        #offlineTranslationBtn.on {
+            background: linear-gradient(45deg, #28a745, #218838);
+        }
+        #offlineTranslationBtn.on:hover {
+            background: linear-gradient(45deg, #218838, #28a745);
+        }
+        #offlineTranslationBtn:disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+        #offlineTranslationStatus {
+            font-size: 0.82em;
+            color: #d0e1ff;
+            margin: 4px 0 2px;
+        }
+        #offlineTranslationProgress {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            height: 8px;
+            margin: 6px auto;
+            max-width: 300px;
+            overflow: hidden;
+        }
+        #offlineTranslationBar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(45deg, #00c6ff, #0072ff);
+            border-radius: 8px;
+            transition: width 0.3s ease;
+        }
+        #offlineTranslationModal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        #offlineTranslationModalCard {
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            border-radius: 20px;
+            padding: 30px;
+            max-width: 400px;
+            width: 90%;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            text-align: center;
+        }
+        #offlineTranslationModalCard h2 {
+            margin-top: 0;
+            color: #fff;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        #offlineTranslationModalCard p {
+            color: #d0e1ff;
+            line-height: 1.5;
+            font-size: 0.95em;
+            text-align: left;
+        }
     </style>
 </head>
 <body>
@@ -177,6 +240,13 @@
         <button id="start">Start Broadcasting & Transcription</button>
         <button id="stop" disabled>Stop Broadcasting</button>
         <button id="toggleTranslation">Transcription: ON</button>
+        <div id="offlineTranslationSection" style="display:none;">
+            <button id="offlineTranslationBtn">Enable Offline Translation (Spanish)…</button>
+            <div id="offlineTranslationStatus" style="display:none;"></div>
+            <div id="offlineTranslationProgress" style="display:none;">
+                <div id="offlineTranslationBar"></div>
+            </div>
+        </div>
         <div id="pythonStatus" style="display:none; background: rgba(255,200,0,0.15); border-radius: 10px; padding: 8px 14px; margin: 8px 0; font-size: 0.85em; color: #ffe066; text-align:left;"></div>
         <div id="serverInfo"><strong>Listeners can connect at:</strong> <span id="listenerUrl"></span><button id="copyUrlButton">Copy URL</button></div>
         <div id="listenerCount">Listeners: 0</div>
@@ -189,6 +259,17 @@
         <div id="debug"></div>
     </div>
 
+    <div id="offlineTranslationModal">
+        <div id="offlineTranslationModalCard">
+            <h2>Offline Spanish Translation</h2>
+            <p>Offline translation translates captions on this Mac instead of over the internet — listeners get higher-quality Spanish captions even when the building has no internet at all. This needs a one-time 2.5 GB download. Do it now on a good connection; it's saved permanently and never downloads again.</p>
+            <div>
+                <button id="offlineTranslationDownloadBtn">Download 2.5 GB</button>
+                <button id="offlineTranslationCancelBtn">Not Now</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let socket;
         const debug = document.getElementById('debug');
@@ -197,6 +278,7 @@
         let sourceNode = null;
         let workletNode = null;
         let translationEnabled = true;
+        let offlineTranslationState = null;
         let listenerCount = 0;
         // Broadcaster token — received via IPC server-info, required by the server
         // when emitting 'broadcaster'.  Set before the socket is created on first
@@ -214,6 +296,48 @@
 
         function updateListenerCount() {
             document.getElementById('listenerCount').textContent = `Listeners: ${listenerCount}`;
+        }
+
+        function renderOfflineTranslation() {
+            const state = offlineTranslationState;
+            const section = document.getElementById('offlineTranslationSection');
+            const btn = document.getElementById('offlineTranslationBtn');
+            const statusEl = document.getElementById('offlineTranslationStatus');
+            const progressContainer = document.getElementById('offlineTranslationProgress');
+            const progressBar = document.getElementById('offlineTranslationBar');
+
+            if (!state || !state.supported) {
+                section.style.display = 'none';
+                return;
+            }
+
+            section.style.display = 'block';
+            btn.disabled = false;
+            btn.classList.remove('on');
+            statusEl.style.display = 'none';
+            statusEl.textContent = '';
+            progressContainer.style.display = 'none';
+            progressBar.style.width = '0%';
+
+            if (!state.modelPresent && !state.downloading) {
+                btn.textContent = 'Enable Offline Translation (Spanish)…';
+            } else if (state.downloading) {
+                btn.disabled = true;
+                btn.textContent = `Downloading… ${state.progress}%`;
+                progressContainer.style.display = 'block';
+                progressBar.style.width = `${state.progress}%`;
+            } else if (state.modelPresent && !state.enabled) {
+                btn.textContent = 'Offline Translation (Spanish): OFF';
+            } else if (state.enabled && !state.ready) {
+                btn.textContent = 'Offline Translation (Spanish): ON';
+                statusEl.style.display = 'block';
+                statusEl.textContent = 'Starting translation engine…';
+            } else if (state.enabled && state.ready) {
+                btn.textContent = 'Offline Translation (Spanish): ON';
+                btn.classList.add('on');
+                statusEl.style.display = 'block';
+                statusEl.textContent = '✓ Spanish captions broadcasting to listeners';
+            }
         }
 
         window.api.onServerInfo((info) => {
@@ -302,6 +426,11 @@
             socket.on('disconnect', () => {
                 log('Disconnected from server');
                 stopStream();
+            });
+            socket.on('offline-translation-state', (state) => {
+                log(`Offline translation state: supported=${state.supported} modelPresent=${state.modelPresent} enabled=${state.enabled} downloading=${state.downloading} progress=${state.progress} ready=${state.ready}`);
+                offlineTranslationState = state;
+                renderOfflineTranslation();
             });
         }
 
@@ -441,6 +570,31 @@
             } catch (err) {
                 log(`Clipboard error: ${err.message}`);
             }
+        });
+
+        document.getElementById('offlineTranslationBtn').addEventListener('click', () => {
+            const state = offlineTranslationState;
+            if (!state || !state.supported) return;
+            if (!state.modelPresent && !state.downloading) {
+                document.getElementById('offlineTranslationModal').style.display = 'flex';
+            } else if (state.modelPresent && !state.enabled) {
+                socket.emit('offline-translation-enable');
+                log('Offline translation enable requested');
+            } else if (state.enabled) {
+                socket.emit('offline-translation-disable');
+                log('Offline translation disable requested');
+            }
+        });
+
+        document.getElementById('offlineTranslationDownloadBtn').addEventListener('click', () => {
+            document.getElementById('offlineTranslationModal').style.display = 'none';
+            socket.emit('offline-translation-download');
+            log('Offline translation download requested');
+        });
+
+        document.getElementById('offlineTranslationCancelBtn').addEventListener('click', () => {
+            document.getElementById('offlineTranslationModal').style.display = 'none';
+            log('Offline translation download cancelled');
         });
 
         document.getElementById('toggleTranslation').addEventListener('click', () => {

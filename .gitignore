@@ -51,6 +51,10 @@ Thumbs.db
 whisper.cpp/
 resources/whisper/
 
+# llama.cpp source checkout and built artifacts (scripts/build-llama.sh)
+llama.cpp/
+resources/llama/
+
 # Model files
 *.tar.gz
 en-us.tar.gz

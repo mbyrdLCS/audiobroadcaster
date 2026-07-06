@@ -1,13 +1,14 @@
 const { app, BrowserWindow, dialog, shell, net, session, Menu } = require('electron');
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const { Server } = require('socket.io');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const crypto = require('crypto');
 const nodeNet = require('node:net');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 let appIsQuitting = false;
 
 // Prevent EPIPE and other socket errors from showing a crash dialog
@@ -330,6 +331,9 @@ function handleTranscript(raw) {
             try { l.emit('transcribed-text', { text: masked }); } catch (e) {}
         });
     }
+    if (translationUserEnabled && llamaReady) {
+        queueTranslation(masked);
+    }
 }
 
 function maybeTranscribe() {
@@ -358,6 +362,470 @@ function maybeTranscribe() {
         });
 }
 
+// ============================================================================
+// Offline Translation — llama-server + Gemma 3 4B (Apple Silicon only)
+//
+// A bundled llama-server binary runs a Gemma 3 4B model downloaded on demand
+// into userData/models/. English captions from handleTranscript() are queued
+// and translated serially via the OpenAI-compatible /v1/chat/completions API.
+// ============================================================================
+
+const TRANSLATION_MODEL_URL = process.env.TRANSLATION_MODEL_URL ||
+    'https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf';
+const TRANSLATION_MODEL_SHA256 = process.env.TRANSLATION_MODEL_SHA256 ||
+    '882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863';
+const TRANSLATION_MODEL_SIZE = Number(process.env.TRANSLATION_MODEL_SIZE) || 2489757856;
+const LLAMA_MAX_RESTARTS = 3;
+
+let translationAppleArm64 = false;
+let translationModelPresent = false;
+let translationUserEnabled = false;
+let translationDownloading = false;
+let translationProgress = 0;
+let llamaReady = false;
+let llamaProcess = null;
+let llamaPort = 0;
+let llamaStarting = false;
+let llamaStopping = false;
+let llamaRestarts = 0;
+
+const translationQueue = [];
+let translationInFlight = false;
+
+// --- Apple Silicon detection (async, cached at startup) ---
+async function detectAppleSilicon() {
+    if (process.platform !== 'darwin') return false;
+    return new Promise((resolve) => {
+        execFile('sysctl', ['-n', 'hw.optional.arm64'], (err, stdout) => {
+            resolve(!err && stdout.trim() === '1');
+        });
+    });
+}
+
+// --- Model path ---
+function translationModelPath() {
+    if (process.env.TRANSLATION_MODEL_PATH) return process.env.TRANSLATION_MODEL_PATH;
+    return path.join(app.getPath('userData'), 'models', 'gemma-3-4b-it-Q4_K_M.gguf');
+}
+
+function checkModelPresent() {
+    translationModelPresent = fs.existsSync(translationModelPath());
+}
+
+// --- Persistence ---
+function translationSettingsPath() {
+    return path.join(app.getPath('userData'), 'translation-settings.json');
+}
+
+function loadTranslationSettings() {
+    try {
+        const data = JSON.parse(fs.readFileSync(translationSettingsPath(), 'utf8'));
+        return { enabled: !!data.enabled };
+    } catch {
+        return { enabled: false };
+    }
+}
+
+function saveTranslationSettings(settings) {
+    try {
+        fs.writeFileSync(translationSettingsPath(), JSON.stringify(settings));
+    } catch (err) {
+        console.error('Failed to save translation settings:', err.message);
+    }
+}
+
+// --- State object ---
+function offlineTranslationState() {
+    return {
+        supported: translationAppleArm64,
+        modelPresent: translationModelPresent,
+        enabled: translationUserEnabled,
+        downloading: translationDownloading,
+        progress: translationProgress,
+        ready: llamaReady
+    };
+}
+
+// --- State emission ---
+function emitTranslationState() {
+    if (broadcasterSocket) {
+        try { broadcasterSocket.emit('offline-translation-state', offlineTranslationState()); } catch (e) {}
+    }
+}
+
+function emitOfflineLanguages() {
+    const langs = (translationUserEnabled && llamaReady) ? ['es'] : [];
+    if (broadcasterSocket) {
+        try { broadcasterSocket.emit('offline-languages', langs); } catch (e) {}
+    }
+    listeners.forEach((l) => {
+        try { l.emit('offline-languages', langs); } catch (e) {}
+    });
+}
+
+// --- Model download ---
+// Supports HTTP redirect following (up to 5 hops) and byte-range resume.
+function startModelDownload() {
+    if (translationDownloading) return;
+    // TEST OVERRIDE: TRANSLATION_MODEL_PATH means model is already in place
+    if (process.env.TRANSLATION_MODEL_PATH) return;
+
+    translationDownloading = true;
+    translationProgress = 0;
+    emitTranslationState();
+
+    const modelPath = translationModelPath();
+    const partPath = modelPath + '.part';
+    const modelDir = path.dirname(modelPath);
+
+    try { fs.mkdirSync(modelDir, { recursive: true }); } catch {}
+
+    let existingSize = 0;
+    try {
+        if (fs.existsSync(partPath)) existingSize = fs.statSync(partPath).size;
+    } catch {}
+
+    if (existingSize > 0) {
+        // Hash the existing bytes first so the running hash is correct on resume
+        const preHash = crypto.createHash('sha256');
+        const readStream = fs.createReadStream(partPath);
+        readStream.on('data', (chunk) => preHash.update(chunk));
+        readStream.on('end', () => performDownload(existingSize, existingSize, preHash));
+        readStream.on('error', (err) => {
+            console.error('Error reading .part file for resume hash:', err.message);
+            performDownload(0, 0, crypto.createHash('sha256'));
+        });
+    } else {
+        performDownload(0, 0, crypto.createHash('sha256'));
+    }
+}
+
+function performDownload(startByte, initialBytesReceived, hash) {
+    const modelPath = translationModelPath();
+    const partPath = modelPath + '.part';
+    let bytesReceived = initialBytesReceived;
+
+    function onDownloadComplete() {
+        if (bytesReceived !== TRANSLATION_MODEL_SIZE) {
+            console.error(`Download size mismatch: got ${bytesReceived}, expected ${TRANSLATION_MODEL_SIZE}`);
+            try { fs.unlinkSync(partPath); } catch {}
+            translationDownloading = false;
+            translationProgress = 0;
+            emitTranslationState();
+            sendStatus('❌ Translation model download failed verification. Please try again.');
+            return;
+        }
+
+        const digest = hash.digest('hex');
+        if (digest !== TRANSLATION_MODEL_SHA256) {
+            console.error(`Download hash mismatch: got ${digest}`);
+            try { fs.unlinkSync(partPath); } catch {}
+            translationDownloading = false;
+            translationProgress = 0;
+            emitTranslationState();
+            sendStatus('❌ Translation model download failed verification. Please try again.');
+            return;
+        }
+
+        try {
+            fs.renameSync(partPath, modelPath);
+        } catch (err) {
+            console.error('Failed to rename model file:', err.message);
+            translationDownloading = false;
+            emitTranslationState();
+            sendStatus('❌ Translation model download failed verification. Please try again.');
+            return;
+        }
+
+        translationDownloading = false;
+        translationProgress = 100;
+        translationModelPresent = true;
+        emitTranslationState();
+        sendStatus('✓ Translation model downloaded');
+        console.log('Translation model download complete');
+
+        if (translationUserEnabled) startLlamaServer();
+    }
+
+    function onDownloadError(message, keepPart) {
+        console.error('Translation model download error:', message);
+        if (!keepPart) {
+            try { fs.unlinkSync(partPath); } catch {}
+        }
+        translationDownloading = false;
+        emitTranslationState();
+        sendStatus(`❌ Translation model download failed: ${message}. Please try again.`);
+    }
+
+    function fetchUrl(url, redirectsLeft) {
+        if (redirectsLeft <= 0) {
+            onDownloadError('Too many redirects', false);
+            return;
+        }
+
+        let parsedUrl;
+        try { parsedUrl = new URL(url); } catch {
+            onDownloadError(`Invalid URL: ${url}`, false);
+            return;
+        }
+
+        const lib = parsedUrl.protocol === 'https:' ? https : http;
+        const port = parsedUrl.port
+            ? Number(parsedUrl.port)
+            : (parsedUrl.protocol === 'https:' ? 443 : 80);
+
+        const reqHeaders = {};
+        if (startByte > 0) reqHeaders['Range'] = `bytes=${startByte}-`;
+
+        const req = lib.get({
+            hostname: parsedUrl.hostname,
+            port,
+            path: parsedUrl.pathname + parsedUrl.search,
+            headers: reqHeaders
+        }, (res) => {
+            if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
+                res.resume();
+                fetchUrl(res.headers.location, redirectsLeft - 1);
+                return;
+            }
+
+            // If server ignores Range and returns 200, restart from zero
+            let writeFlags = 'a';
+            if (res.statusCode === 200 && startByte > 0) {
+                startByte = 0;
+                bytesReceived = 0;
+                hash = crypto.createHash('sha256');
+                try { fs.unlinkSync(partPath); } catch {}
+                writeFlags = 'w';
+            } else if (res.statusCode !== 206 && res.statusCode !== 200) {
+                res.resume();
+                onDownloadError(`HTTP ${res.statusCode}`, false);
+                return;
+            }
+
+            const ws = fs.createWriteStream(partPath, { flags: writeFlags });
+            // Hash/progress via 'data' listener; pipe() handles disk backpressure
+            // (a manual ws.write() loop would buffer unboundedly on slow disks).
+            res.on('data', (chunk) => {
+                hash.update(chunk);
+                bytesReceived += chunk.length;
+                const pct = Math.floor(bytesReceived / TRANSLATION_MODEL_SIZE * 100);
+                if (pct !== translationProgress) {
+                    translationProgress = pct;
+                    emitTranslationState();
+                }
+            });
+            res.pipe(ws);
+            ws.on('finish', onDownloadComplete);
+            ws.on('error', (err) => onDownloadError(err.message, true));
+            res.on('error', (err) => {
+                ws.destroy();
+                onDownloadError(err.message, true);
+            });
+        });
+
+        req.on('error', (err) => onDownloadError(err.message, true));
+    }
+
+    fetchUrl(TRANSLATION_MODEL_URL, 5);
+}
+
+// --- llama-server lifecycle ---
+function llamaDir() {
+    return app.isPackaged
+        ? path.join(process.resourcesPath, 'llama')
+        : path.join(__dirname, 'resources', 'llama');
+}
+
+// llama-server responds HTTP 503 on /health while the model loads;
+// only 200 means ready. Connection refused is also still-loading.
+function waitForLlamaReady() {
+    return new Promise((resolve, reject) => {
+        let attempts = 0;
+        const poll = () => {
+            if (!llamaProcess) return reject(new Error('llama-server exited during startup'));
+            const req = http.get({ host: '127.0.0.1', port: llamaPort, path: '/health' }, (res) => {
+                res.resume();
+                if (res.statusCode === 200) {
+                    resolve();
+                } else {
+                    // 503 = model still loading; keep polling
+                    if (++attempts > 120) reject(new Error('llama-server did not become ready'));
+                    else setTimeout(poll, 1000);
+                }
+            });
+            req.on('error', () => {
+                // Connection refused = still starting
+                if (++attempts > 120) reject(new Error('llama-server did not become ready'));
+                else setTimeout(poll, 1000);
+            });
+        };
+        setTimeout(poll, 1000);
+    });
+}
+
+async function startLlamaServer() {
+    if (llamaProcess || llamaStarting) return;
+    llamaStarting = true;
+    llamaStopping = false;
+
+    const bin = path.join(llamaDir(), 'llama-server');
+    const modelPath = translationModelPath();
+
+    if (!fs.existsSync(bin)) {
+        console.error(`llama-server binary missing at ${bin}`);
+        sendStatus('❌ Offline translation binary is missing.');
+        llamaStarting = false;
+        return;
+    }
+
+    if (!fs.existsSync(modelPath)) {
+        console.error(`Translation model missing at ${modelPath}`);
+        sendStatus('❌ Translation model is missing. Please download it first.');
+        llamaStarting = false;
+        return;
+    }
+
+    sendStatus('⏳ Loading offline translation model, please wait...');
+    try {
+        llamaPort = await findFreePort();
+        const args = [
+            '-m', modelPath,
+            '--host', '127.0.0.1',
+            '--port', String(llamaPort),
+            '-ngl', '99',
+            '--ctx-size', '4096'
+        ];
+
+        console.log(`Starting llama-server on port ${llamaPort}...`);
+        llamaProcess = spawn(bin, args);
+        llamaProcess.stdout.on('data', (d) => console.log('llama-server:', d.toString().trim()));
+        llamaProcess.stderr.on('data', (d) => console.log('llama-server:', d.toString().trim()));
+        llamaProcess.on('error', (err) => {
+            console.error(`llama-server spawn error: ${err.message}`);
+            sendStatus(`❌ Could not start offline translation: ${err.message}`);
+        });
+        llamaProcess.on('close', (code) => {
+            console.log(`llama-server exited with code ${code}`);
+            llamaProcess = null;
+            llamaReady = false;
+            emitTranslationState();
+            emitOfflineLanguages();
+            if (appIsQuitting || llamaStopping || code === 0) {
+                llamaStopping = false;
+                return;
+            }
+            llamaRestarts++;
+            if (llamaRestarts > LLAMA_MAX_RESTARTS) {
+                sendStatus('❌ Offline translation keeps crashing. Please restart the app or contact support.');
+                return;
+            }
+            sendStatus(`❌ Offline translation crashed (code ${code}). Restarting...`);
+            setTimeout(() => startLlamaServer(), 2000 * llamaRestarts);
+        });
+
+        await waitForLlamaReady();
+        llamaReady = true;
+        llamaRestarts = 0;
+        console.log('llama-server ready');
+        emitTranslationState();
+        emitOfflineLanguages();
+        sendStatus('✓ Offline Spanish translation ready');
+    } catch (err) {
+        console.error(`llama-server startup failed: ${err.message}`);
+        sendStatus(`❌ Offline translation failed to start: ${err.message}`);
+        if (llamaProcess) llamaProcess.kill();
+    } finally {
+        llamaStarting = false;
+    }
+}
+
+function stopLlamaServer() {
+    if (llamaProcess) {
+        llamaStopping = true;
+        llamaProcess.kill();
+        llamaProcess = null;
+    }
+    llamaReady = false;
+    emitTranslationState();
+    emitOfflineLanguages();
+}
+
+// --- Translation pipeline ---
+const TRANSLATION_SYSTEM_PROMPT =
+`You are translating live English captions from a church service into natural Latin American Spanish, in real time. Rules:
+- Output ONLY the Spanish translation. No explanations.
+- Scripture quotations should follow Reina-Valera phrasing (e.g. 'begotten son' = 'Hijo unigénito', 'Let us pray' = 'Oremos').
+- Captions may be sentence fragments cut mid-thought; translate exactly what is given, never complete or extend the thought.
+- Prefer simple, natural wording a Spanish-speaking congregation would hear from a live interpreter.
+
+Example: 'Please turn with me to the book of John' -> 'Por favor, abran sus Biblias conmigo en el libro de Juan'
+Example: 'and he said unto them, follow me and I will make you' -> 'y les dijo: síganme y los haré'`;
+
+function queueTranslation(text) {
+    if (translationQueue.length >= 3) {
+        console.warn('Translation queue full, dropping oldest item');
+        translationQueue.shift();
+    }
+    translationQueue.push(text);
+    if (!translationInFlight) processTranslationQueue();
+}
+
+function processTranslationQueue() {
+    if (translationInFlight || translationQueue.length === 0) return;
+    const text = translationQueue.shift();
+    translationInFlight = true;
+
+    const body = JSON.stringify({
+        messages: [
+            { role: 'system', content: TRANSLATION_SYSTEM_PROMPT },
+            { role: 'user', content: text }
+        ],
+        temperature: 0,
+        max_tokens: 256
+    });
+
+    const req = http.request({
+        host: '127.0.0.1',
+        port: llamaPort,
+        path: '/v1/chat/completions',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body)
+        }
+    }, (res) => {
+        let data = '';
+        res.on('data', (d) => { data += d; });
+        res.on('end', () => {
+            try {
+                const result = JSON.parse(data);
+                const translated = (result.choices?.[0]?.message?.content || '').trim();
+                if (translated) {
+                    if (broadcasterSocket) {
+                        try { broadcasterSocket.emit('translated-text', { lang: 'es', text: translated }); } catch (e) {}
+                    }
+                    listeners.forEach((l) => {
+                        try { l.emit('translated-text', { lang: 'es', text: translated }); } catch (e) {}
+                    });
+                }
+            } catch (err) {
+                console.error('Translation response parse error:', err.message);
+            }
+            translationInFlight = false;
+            processTranslationQueue();
+        });
+    });
+
+    req.setTimeout(25000, () => req.destroy(new Error('translation timed out')));
+    req.on('error', (err) => {
+        console.error('Translation request error:', err.message);
+        translationInFlight = false;
+        processTranslationQueue();
+    });
+    req.end(body);
+}
+
 io.on('connection', (socket) => {
     console.log(`Client connected: ${socket.id}`);
 
@@ -370,6 +838,10 @@ io.on('connection', (socket) => {
         console.log(`Broadcaster registered: ${socket.id}`);
         listeners.forEach((_, listenerId) => socket.emit('new-listener', listenerId));
         startWhisperServer();
+        socket.emit('offline-translation-state', offlineTranslationState());
+        if (translationAppleArm64 && translationUserEnabled && translationModelPresent) {
+            startLlamaServer();  // idempotent: no-op if llamaProcess || llamaStarting
+        }
     });
 
     socket.on('listener', () => {
@@ -377,6 +849,8 @@ io.on('connection', (socket) => {
         console.log(`Listener registered: ${socket.id}`);
         // Send current translation state to new listener
         socket.emit('translation-state', translationEnabled);
+        const offlineLangs = (translationUserEnabled && llamaReady) ? ['es'] : [];
+        socket.emit('offline-languages', offlineLangs);
         if (broadcasterSocket) broadcasterSocket.emit('new-listener', socket.id);
     });
 
@@ -421,6 +895,27 @@ io.on('connection', (socket) => {
         console.log(`Translation ${state ? 'enabled' : 'disabled'}`);
         // Notify all listeners of translation state change
         listeners.forEach(listener => listener.emit('translation-state', state));
+    });
+
+    socket.on('offline-translation-download', () => {
+        if (socket !== broadcasterSocket) return;
+        startModelDownload();
+    });
+
+    socket.on('offline-translation-enable', () => {
+        if (socket !== broadcasterSocket) return;
+        if (!translationModelPresent) return;
+        translationUserEnabled = true;
+        saveTranslationSettings({ enabled: true });
+        emitTranslationState();
+        startLlamaServer();
+    });
+
+    socket.on('offline-translation-disable', () => {
+        if (socket !== broadcasterSocket) return;
+        translationUserEnabled = false;
+        saveTranslationSettings({ enabled: false });
+        stopLlamaServer();
     });
 
     socket.on('disconnect', () => {
@@ -570,6 +1065,39 @@ function buildMenu() {
                     label: 'Check for Updates…',
                     click: () => checkForUpdates({ silent: false })
                 },
+                {
+                    label: 'Remove Downloaded Translation Model…',
+                    click: async () => {
+                        const modelPath = translationModelPath();
+                        if (!fs.existsSync(modelPath)) {
+                            dialog.showMessageBox(mainWindow, {
+                                type: 'info',
+                                title: 'No Model Found',
+                                message: 'No translation model is currently downloaded.',
+                                buttons: ['OK']
+                            });
+                            return;
+                        }
+                        const { response } = await dialog.showMessageBox(mainWindow, {
+                            type: 'question',
+                            title: 'Remove Translation Model',
+                            message: 'Remove the downloaded translation model?',
+                            detail: 'This will free approximately 2.5 GB of disk space. Spanish offline captions will require re-downloading the model.',
+                            buttons: ['Remove', 'Cancel'],
+                            defaultId: 1,
+                            cancelId: 1
+                        });
+                        if (response === 0) {
+                            translationUserEnabled = false;
+                            saveTranslationSettings({ enabled: false });
+                            stopLlamaServer();
+                            try { fs.unlinkSync(modelPath); } catch {}
+                            try { fs.unlinkSync(modelPath + '.part'); } catch {}
+                            translationModelPresent = false;
+                            emitTranslationState();
+                        }
+                    }
+                },
                 { type: 'separator' },
                 { role: 'services' },
                 { type: 'separator' },
@@ -617,6 +1145,11 @@ app.whenReady().then(async () => {
     });
     session.defaultSession.setPermissionCheckHandler(() => true);
 
+    translationAppleArm64 = await detectAppleSilicon();
+    const translationSettings = loadTranslationSettings();
+    translationUserEnabled = translationSettings.enabled;
+    checkModelPresent();
+
     buildMenu();
     const { ip, port } = await startServer();
     createBroadcasterWindow(ip, port);
@@ -625,5 +1158,6 @@ app.whenReady().then(async () => {
 app.on('will-quit', () => {
     appIsQuitting = true;
     if (whisperProcess) whisperProcess.kill();
+    if (llamaProcess) llamaProcess.kill();
     server.close();
 });

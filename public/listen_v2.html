@@ -204,6 +204,7 @@
         let lastTranslatedLang = 'en';
         let speechEnabled = false;
         let translationEnabled = false;
+        let offlineLangs = new Set();
 
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 
@@ -417,6 +418,7 @@
 
             socket.on('transcribed-text', async ({ text }) => {
                 const lang = document.getElementById('targetLanguage').value;
+                if (offlineLangs.has(lang)) return;  // broadcaster sends this language via 'translated-text'
                 // Silence raw audio immediately (before async translation) so English doesn't bleed through
                 if (speechEnabled && translationEnabled) pauseAudioForTTS();
                 const translated = await translateText(text, lang);
@@ -425,6 +427,22 @@
                 lastTranslatedText = translated;
                 lastTranslatedLang = lang;
                 if (speechEnabled && translated) speakText(translated);
+            });
+
+            socket.on('offline-languages', (langs) => {
+                offlineLangs = new Set(Array.isArray(langs) ? langs : []);
+                log(`Broadcaster-translated languages: ${langs && langs.length ? langs.join(', ') : 'none'}`);
+            });
+
+            socket.on('translated-text', ({ lang, text }) => {
+                const selected = document.getElementById('targetLanguage').value;
+                if (lang !== selected || !text) return;
+                if (speechEnabled && translationEnabled) pauseAudioForTTS();
+                log(`Transcribed [${lang}, offline]: ${text}`);
+                translatedTextDiv.textContent = text;
+                lastTranslatedText = text;
+                lastTranslatedLang = lang;
+                if (speechEnabled) speakText(text);
             });
 
             socket.on('translation-state', (state) => {

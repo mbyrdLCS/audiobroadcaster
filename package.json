@@ -53,6 +53,10 @@
         "to": "whisper"
       },
       {
+        "from": "resources/llama",
+        "to": "llama"
+      },
+      {
         "from": "THIRD_PARTY_LICENSES.txt",
         "to": "THIRD_PARTY_LICENSES.txt"
       }

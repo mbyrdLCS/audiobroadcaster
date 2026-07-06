@@ -24,8 +24,12 @@ const SAMPLE_RATE = 44100;
 const CHUNK_SAMPLES = 4096;
 const pcm = fs.readFileSync(wavPath).subarray(44);
 
+// Languages to request (one simulated listener per language).
+// Translation is demand-driven: the server only translates selected languages.
+const TEST_LANGS = (process.env.TEST_LANGS || 'es').split(',');
+
 const english = [];
-const spanish = [];
+const translated = {};  // lang -> [texts]
 let offset = 0;
 
 const broadcaster = io(url, { transports: ['websocket'] });
@@ -48,6 +52,7 @@ broadcaster.on('offline-translation-state', (s) => {
 listener.on('connect', () => {
     console.log('[listener] connected');
     listener.emit('listener');
+    listener.emit('select-language', TEST_LANGS[0]);
 });
 listener.on('offline-languages', (langs) => console.log('[listener] offline languages:', langs));
 listener.on('transcribed-text', ({ text }) => {
@@ -55,8 +60,17 @@ listener.on('transcribed-text', ({ text }) => {
     console.log('[EN]', text);
 });
 listener.on('translated-text', ({ lang, text }) => {
-    spanish.push(text);
+    (translated[lang] = translated[lang] || []).push(text);
     console.log(`[${lang.toUpperCase()}]`, text);
+});
+
+// Extra listeners for additional languages
+TEST_LANGS.slice(1).forEach((lang) => {
+    const extra = io(url, { transports: ['websocket'] });
+    extra.on('connect', () => {
+        extra.emit('listener');
+        extra.emit('select-language', lang);
+    });
 });
 
 const timer = setInterval(() => {
@@ -72,6 +86,8 @@ setTimeout(() => {
     broadcaster.emit('stop-transcription');
     broadcaster.close();
     listener.close();
-    console.log(`\n=== English captions: ${english.length}, Spanish translations: ${spanish.length} ===`);
-    process.exit(english.length > 0 && spanish.length > 0 ? 0 : 1);
+    const counts = TEST_LANGS.map((l) => `${l}:${(translated[l] || []).length}`).join(' ');
+    console.log(`\n=== English captions: ${english.length}, translations: ${counts} ===`);
+    const allLangsGotSome = TEST_LANGS.every((l) => (translated[l] || []).length > 0);
+    process.exit(english.length > 0 && allLangsGotSome ? 0 : 1);
 }, runSeconds * 1000);

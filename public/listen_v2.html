@@ -369,6 +369,9 @@
             socket.on('connect', () => {
                 log('Connected to server');
                 socket.emit('listener');
+                // Tell the server which language this listener wants so it can
+                // translate on demand (offline languages only; ignored otherwise)
+                socket.emit('select-language', document.getElementById('targetLanguage').value);
             });
 
             // Schedule each broadcaster chunk immediately as it arrives.
@@ -497,6 +500,7 @@
             });
             document.getElementById('targetLanguage').addEventListener('change', (e) => {
                 const lang = e.target.value;
+                if (socket && socket.connected) socket.emit('select-language', lang);
                 if (lang === 'en') {
                     // Switching to English: disable speech
                     if (speechEnabled) {

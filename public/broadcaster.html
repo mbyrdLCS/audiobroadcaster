@@ -241,7 +241,7 @@
         <button id="stop" disabled>Stop Broadcasting</button>
         <button id="toggleTranslation">Transcription: ON</button>
         <div id="offlineTranslationSection" style="display:none;">
-            <button id="offlineTranslationBtn">Enable Offline Translation (Spanish)…</button>
+            <button id="offlineTranslationBtn">Enable Offline Translation…</button>
             <div id="offlineTranslationStatus" style="display:none;"></div>
             <div id="offlineTranslationProgress" style="display:none;">
                 <div id="offlineTranslationBar"></div>
@@ -261,8 +261,8 @@
 
     <div id="offlineTranslationModal">
         <div id="offlineTranslationModalCard">
-            <h2>Offline Spanish Translation</h2>
-            <p>Offline translation translates captions on this Mac instead of over the internet — listeners get higher-quality Spanish captions even when the building has no internet at all. This needs a one-time 2.5 GB download. Do it now on a good connection; it's saved permanently and never downloads again.</p>
+            <h2>Offline Translation</h2>
+            <p>Offline translation translates captions on this Mac instead of over the internet — listeners get higher-quality captions in Spanish, Portuguese, French, Chinese, Korean, and more — even when the building has no internet at all. This needs a one-time 2.5 GB download. Do it now on a good connection; it's saved permanently and never downloads again.</p>
             <div>
                 <button id="offlineTranslationDownloadBtn">Download 2.5 GB</button>
                 <button id="offlineTranslationCancelBtn">Not Now</button>
@@ -320,23 +320,23 @@
             progressBar.style.width = '0%';
 
             if (!state.modelPresent && !state.downloading) {
-                btn.textContent = 'Enable Offline Translation (Spanish)…';
+                btn.textContent = 'Enable Offline Translation…';
             } else if (state.downloading) {
                 btn.disabled = true;
                 btn.textContent = `Downloading… ${state.progress}%`;
                 progressContainer.style.display = 'block';
                 progressBar.style.width = `${state.progress}%`;
             } else if (state.modelPresent && !state.enabled) {
-                btn.textContent = 'Offline Translation (Spanish): OFF';
+                btn.textContent = 'Offline Translation: OFF';
             } else if (state.enabled && !state.ready) {
-                btn.textContent = 'Offline Translation (Spanish): ON';
+                btn.textContent = 'Offline Translation: ON';
                 statusEl.style.display = 'block';
                 statusEl.textContent = 'Starting translation engine…';
             } else if (state.enabled && state.ready) {
-                btn.textContent = 'Offline Translation (Spanish): ON';
+                btn.textContent = 'Offline Translation: ON';
                 btn.classList.add('on');
                 statusEl.style.display = 'block';
-                statusEl.textContent = '✓ Spanish captions broadcasting to listeners';
+                statusEl.textContent = '✓ Translated captions broadcasting (8 languages)';
             }
         }
 

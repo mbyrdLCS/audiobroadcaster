@@ -992,6 +992,14 @@ function createBroadcasterWindow(ip, port) {
             nodeIntegration: false
         }
     });
+    // Open all links/window.open targets (donation button, listener URL) in the
+    // user's default browser instead of a bare Electron child window.
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+        if (url.startsWith('http://') || url.startsWith('https://')) {
+            shell.openExternal(url);
+        }
+        return { action: 'deny' };
+    });
     mainWindow.loadURL(`http://localhost:${port}/broadcaster.html`);
     mainWindow.webContents.on('did-finish-load', () => {
         mainWindow.webContents.send('server-info', { ip, port, token: broadcasterToken });
